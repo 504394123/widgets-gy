@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.0.2",
+  version: "4.0.3",
   requiredVersion: "0.0.1",
   description: "获取 Gying.si 影视数据，滚动加载更多（需配置 Cookie）",
   author: "Antigravity",
