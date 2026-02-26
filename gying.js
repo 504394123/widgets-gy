@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.0.5",
+  version: "4.0.6",
   requiredVersion: "0.0.1",
   description: "获取 Gying.si 影视数据，滚动加载更多（需配置 Cookie）",
   author: "Antigravity",
@@ -290,6 +290,148 @@ WidgetMetadata = {
         },
       ],
     },
+    {
+      id: "recentAnime",
+      title: "最近更新动漫",
+      functionName: "recentAnime",
+      params: [
+        { name: "page", title: "页码", type: "page" },
+        {
+          name: "sort_by",
+          title: "排序方式",
+          type: "enumeration",
+          enumOptions: [
+            { title: "添加时间", value: "addtime" },
+            { title: "更新时间", value: "uptime" },
+            { title: "上映时间", value: "date" },
+            { title: "评分最高", value: "score" },
+            { title: "评分人数", value: "number" },
+            { title: "评分总人数", value: "numbers" },
+            { title: "综合评分", value: "cscore" },
+          ],
+        },
+        {
+          name: "genre",
+          title: "类型",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "剧情", value: "剧情" },
+            { title: "萝系", value: "萝系" },
+            { title: "科幻", value: "科幻" },
+            { title: "日常", value: "日常" },
+            { title: "战斗", value: "战斗" },
+            { title: "战争", value: "战争" },
+            { title: "热血", value: "热血" },
+            { title: "机战", value: "机战" },
+            { title: "游戏", value: "游戏" },
+            { title: "搞笑", value: "搞笑" },
+            { title: "恋爱", value: "恋爱" },
+            { title: "后宫", value: "后宫" },
+            { title: "百合", value: "百合" },
+            { title: "基腐", value: "基腐" },
+            { title: "冒险", value: "冒险" },
+            { title: "奇幻", value: "奇幻" },
+            { title: "恐怖", value: "恐怖" },
+            { title: "惊悚", value: "惊悚" },
+            { title: "犯罪", value: "犯罪" },
+            { title: "悬疑", value: "悬疑" },
+            { title: "古装", value: "古装" },
+            { title: "武侠", value: "武侠" },
+            { title: "泡面", value: "泡面" },
+            { title: "校园", value: "校园" },
+            { title: "运动", value: "运动" },
+            { title: "青春", value: "青春" },
+            { title: "治愈", value: "治愈" },
+            { title: "致郁", value: "致郁" },
+            { title: "励志", value: "励志" },
+            { title: "历史", value: "历史" },
+            { title: "异世界", value: "异世界" },
+          ],
+        },
+        {
+          name: "area",
+          title: "地区",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "大陆", value: "大陆" },
+            { title: "香港", value: "香港" },
+            { title: "台湾", value: "台湾" },
+            { title: "欧美", value: "欧美" },
+            { title: "美国", value: "美国" },
+            { title: "日本", value: "日本" },
+            { title: "韩国", value: "韩国" },
+            { title: "英国", value: "英国" },
+            { title: "法国", value: "法国" },
+            { title: "德国", value: "德国" },
+            { title: "亚洲", value: "亚洲" },
+            { title: "海外", value: "海外" },
+          ],
+        },
+        {
+          name: "year",
+          title: "年代",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "2026", value: "2026" },
+            { title: "2025", value: "2025" },
+            { title: "2024", value: "2024" },
+            { title: "2023", value: "2023" },
+            { title: "2022", value: "2022" },
+            { title: "2021", value: "2021" },
+            { title: "2020", value: "2020" },
+            { title: "2019", value: "2019" },
+            { title: "2018", value: "2018" },
+            { title: "2017", value: "2017" },
+            { title: "2016", value: "2016" },
+            { title: "20年代", value: "120" },
+            { title: "10年代", value: "110" },
+            { title: "00年代", value: "100" },
+            { title: "90年代", value: "90" },
+          ],
+        },
+        {
+          name: "rrange",
+          title: "评分区间",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部 (0-10)", value: "0_10" },
+            { title: "1分以上", value: "1_10" },
+            { title: "2分以上", value: "2_10" },
+            { title: "3分以上", value: "3_10" },
+            { title: "4分以上", value: "4_10" },
+            { title: "5分以上", value: "5_10" },
+            { title: "6分以上（默认）", value: "6_10" },
+            { title: "7分以上", value: "7_10" },
+            { title: "8分以上", value: "8_10" },
+            { title: "9分以上", value: "9_10" },
+            { title: "仅10分", value: "10_10" },
+          ],
+        },
+        {
+          name: "srange",
+          title: "评分人数",
+          type: "enumeration",
+          enumOptions: [
+            { title: "不限", value: "0" },
+            { title: "1000人以上", value: "1000" },
+            { title: "2000人以上", value: "2000" },
+            { title: "3000人以上", value: "3000" },
+            { title: "4000人以上", value: "4000" },
+            { title: "5000人以上（默认）", value: "5000" },
+            { title: "1万人以上", value: "10000" },
+            { title: "2万人以上", value: "20000" },
+            { title: "5万人以上", value: "50000" },
+            { title: "10万人以上", value: "100000" },
+            { title: "20万人以上", value: "200000" },
+            { title: "50万人以上", value: "500000" },
+            { title: "100万人以上", value: "1000000" },
+          ],
+        },
+      ],
+    },
   ],
 };
 
@@ -320,6 +462,27 @@ function cleanTVTitle(title) {
   return title
     .replace(/\s*第[一二三四五六七八九十百千0-9]+季.*$/, "")
     .replace(/\s*Season\s*\d+.*$/i, "")
+    .trim();
+}
+
+/**
+ * 动漫标题清理，处理动漫特有的命名规律
+ * 例：仙逆 年番2       → 仙逆
+ * 例：火之童子 第7季    → 火之童子
+ * 例：凡人修仙传：星海飞驰篇 → 凡人修仙传
+ */
+function cleanAnimeTitle(title) {
+  return title
+    // 去掉“第X季”（中文数字或阿拉伯数字）
+    .replace(/\s*第[一二三四五六七八九十百千0-9]+季.*$/, "")
+    // 去掉“Season N”
+    .replace(/\s*Season\s*\d+.*$/i, "")
+    // 去掉“年番N”（年番番组）
+    .replace(/\s*年番\s*\d+.*$/, "")
+    // 去掉“第N期”（屶1期、制1期等）
+    .replace(/\s*第[一二三四五六七八九十百千0-9]+期.*$/, "")
+    // 去掉全角凒号副标题（：之後的内容）
+    .replace(/[：:].*$/, "")
     .trim();
 }
 
@@ -444,7 +607,9 @@ async function fetchRecent(gyingType, mediaType, params) {
     const gid = ids[n] || "";
     const rating = ratings[n] || 0;
     const posterPath = gid ? `https://s.tutu.pm/img/mv/${gid}/256.webp` : "";
-    const searchTitle = mediaType === "tv" ? cleanTVTitle(title) : title;
+    const searchTitle = gyingType === "ac"
+      ? cleanAnimeTitle(title)
+      : (mediaType === "tv" ? cleanTVTitle(title) : title);
     // 电影才用年份精确匹配；剧集年份是当季播放年非首播年，不传
     const meta = allMeta.slice(sliceStart, sliceEnd)[n] || [];
     const releaseYear = (mediaType === "movie" && typeof meta[0] === "number") ? meta[0] : null;
@@ -487,4 +652,9 @@ async function recentMovies(params) {
 
 async function recentTV(params) {
   return await fetchRecent("tv", "tv", params);
+}
+
+async function recentAnime(params) {
+  // 动漫大多数是剧集形式，用 tv 类型搜 TMDB
+  return await fetchRecent("ac", "tv", params);
 }
