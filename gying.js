@@ -147,6 +147,9 @@ WidgetMetadata = {
           enumOptions: [
             { title: "不限", value: "0" },
             { title: "1000人以上", value: "1000" },
+            { title: "2000人以上", value: "2000" },
+            { title: "3000人以上", value: "3000" },
+            { title: "4000人以上", value: "4000" },
             { title: "5000人以上（默认）", value: "5000" },
             { title: "1万人以上", value: "10000" },
             { title: "2万人以上", value: "20000" },
@@ -272,6 +275,9 @@ WidgetMetadata = {
           enumOptions: [
             { title: "不限", value: "0" },
             { title: "1000人以上", value: "1000" },
+            { title: "2000人以上", value: "2000" },
+            { title: "3000人以上", value: "3000" },
+            { title: "4000人以上", value: "4000" },
             { title: "5000人以上（默认）", value: "5000" },
             { title: "1万人以上", value: "10000" },
             { title: "2万人以上", value: "20000" },
