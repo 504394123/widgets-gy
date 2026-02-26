@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.0.3",
+  version: "4.0.4",
   requiredVersion: "0.0.1",
   description: "获取 Gying.si 影视数据，滚动加载更多（需配置 Cookie）",
   author: "Antigravity",
@@ -353,20 +353,27 @@ async function fetchGying(type, page, sort, cookieString, filters = {}) {
 /**
  * 用标题搜索 TMDB，返回第一个匹配结果
  */
-async function searchTMDB(title, mediaType) {
+async function searchTMDB(title, mediaType, year) {
   try {
     const api = mediaType === "tv" ? "search/tv" : "search/movie";
-    const response = await Widget.tmdb.get(api, {
-      params: {
-        query: title,
-        language: "zh-CN",
+    const searchParams = {
+      query: title,
+      language: "zh-CN",
+    };
+    // 加上年份可显著提升匹配准确度
+    if (year && typeof year === "number" && year > 1900) {
+      if (mediaType === "tv") {
+        searchParams.first_air_date_year = year;
+      } else {
+        searchParams.year = year;
       }
-    });
+    }
+    const response = await Widget.tmdb.get(api, { params: searchParams });
     if (response && response.results && response.results.length > 0) {
       return response.results[0];
     }
   } catch (err) {
-    console.error(`TMDB 搜索"${title}"失败`, err);
+    console.error(`TMDB 搜索"${title}"(年份:${year})失败`, err);
   }
   return null;
 }
@@ -418,6 +425,7 @@ async function fetchRecent(gyingType, mediaType, params) {
   const allTitles = data.t || [];
   const allIds = data.i || [];
   const allRatings = data.d || [];
+  const allMeta = data.a || [];  // a[n][0] = 上映年份
 
   if (allTitles.length === 0) {
     console.log(`Gying 第 ${gyingPage} 页无数据`);
@@ -437,8 +445,11 @@ async function fetchRecent(gyingType, mediaType, params) {
     const rating = ratings[n] || 0;
     const posterPath = gid ? `https://s.tutu.pm/img/mv/${gid}/256.webp` : "";
     const searchTitle = mediaType === "tv" ? cleanTVTitle(title) : title;
+    // 电影才用年份精确匹配；剧集年份是当季播放年非首播年，不传
+    const meta = allMeta.slice(sliceStart, sliceEnd)[n] || [];
+    const releaseYear = (mediaType === "movie" && typeof meta[0] === "number") ? meta[0] : null;
 
-    return searchTMDB(searchTitle, mediaType).then(tmdb => {
+    return searchTMDB(searchTitle, mediaType, releaseYear).then(tmdb => {
       if (tmdb) {
         return {
           id: tmdb.id,
