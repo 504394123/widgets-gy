@@ -41,6 +41,87 @@ WidgetMetadata = {
             { title: "综合评分", value: "cscore" },
           ],
         },
+        {
+          name: "genre",
+          title: "类型",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "剧情", value: "剧情" },
+            { title: "科幻", value: "科幻" },
+            { title: "动作", value: "动作" },
+            { title: "喜剧", value: "喜剧" },
+            { title: "爱情", value: "爱情" },
+            { title: "冒险", value: "冒险" },
+            { title: "奇幻", value: "奇幻" },
+            { title: "动画", value: "动画" },
+            { title: "恐怖", value: "恐怖" },
+            { title: "惊悚", value: "惊悚" },
+            { title: "战争", value: "战争" },
+            { title: "犯罪", value: "犯罪" },
+            { title: "悬疑", value: "悬疑" },
+            { title: "传记", value: "传记" },
+            { title: "纪录", value: "纪录" },
+            { title: "歌舞", value: "歌舞" },
+            { title: "音乐", value: "音乐" },
+            { title: "古装", value: "古装" },
+            { title: "武侠", value: "武侠" },
+            { title: "家庭", value: "家庭" },
+            { title: "丧尸", value: "丧尸" },
+            { title: "灾难", value: "灾难" },
+            { title: "西部", value: "西部" },
+            { title: "历史", value: "历史" },
+            { title: "励志", value: "励志" },
+          ],
+        },
+        {
+          name: "area",
+          title: "地区",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "大陆", value: "大陆" },
+            { title: "香港", value: "香港" },
+            { title: "台湾", value: "台湾" },
+            { title: "欧美", value: "欧美" },
+            { title: "美国", value: "美国" },
+            { title: "日本", value: "日本" },
+            { title: "韩国", value: "韩国" },
+            { title: "英国", value: "英国" },
+            { title: "法国", value: "法国" },
+            { title: "德国", value: "德国" },
+            { title: "印度", value: "印度" },
+            { title: "泰国", value: "泰国" },
+            { title: "亚洲", value: "亚洲" },
+            { title: "海外", value: "海外" },
+            { title: "俄罗斯", value: "俄罗斯" },
+            { title: "意大利", value: "意大利" },
+            { title: "西班牙", value: "西班牙" },
+          ],
+        },
+        {
+          name: "year",
+          title: "年代",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "2026", value: "2026" },
+            { title: "2025", value: "2025" },
+            { title: "2024", value: "2024" },
+            { title: "2023", value: "2023" },
+            { title: "2022", value: "2022" },
+            { title: "2021", value: "2021" },
+            { title: "2020", value: "2020" },
+            { title: "2019", value: "2019" },
+            { title: "2018", value: "2018" },
+            { title: "2017", value: "2017" },
+            { title: "2016", value: "2016" },
+            { title: "20年代", value: "120" },
+            { title: "10年代", value: "110" },
+            { title: "00年代", value: "100" },
+            { title: "90年代", value: "90" },
+          ],
+        },
       ],
     },
     {
@@ -61,6 +142,74 @@ WidgetMetadata = {
             { title: "评分人数", value: "number" },
             { title: "评分总人数", value: "numbers" },
             { title: "综合评分", value: "cscore" },
+          ],
+        },
+        {
+          name: "genre",
+          title: "类型",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "剧情", value: "剧情" },
+            { title: "科幻", value: "科幻" },
+            { title: "动作", value: "动作" },
+            { title: "喜剧", value: "喜剧" },
+            { title: "爱情", value: "爱情" },
+            { title: "冒险", value: "冒险" },
+            { title: "奇幻", value: "奇幻" },
+            { title: "动画", value: "动画" },
+            { title: "恐怖", value: "恐怖" },
+            { title: "惊悚", value: "惊悚" },
+            { title: "战争", value: "战争" },
+            { title: "犯罪", value: "犯罪" },
+            { title: "悬疑", value: "悬疑" },
+            { title: "家庭", value: "家庭" },
+            { title: "历史", value: "历史" },
+            { title: "励志", value: "励志" },
+            { title: "青春", value: "青春" },
+            { title: "古装", value: "古装" },
+          ],
+        },
+        {
+          name: "area",
+          title: "地区",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "大陆", value: "大陆" },
+            { title: "香港", value: "香港" },
+            { title: "台湾", value: "台湾" },
+            { title: "欧美", value: "欧美" },
+            { title: "美国", value: "美国" },
+            { title: "日本", value: "日本" },
+            { title: "韩国", value: "韩国" },
+            { title: "英国", value: "英国" },
+            { title: "泰国", value: "泰国" },
+            { title: "亚洲", value: "亚洲" },
+            { title: "海外", value: "海外" },
+          ],
+        },
+        {
+          name: "year",
+          title: "年代",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "2026", value: "2026" },
+            { title: "2025", value: "2025" },
+            { title: "2024", value: "2024" },
+            { title: "2023", value: "2023" },
+            { title: "2022", value: "2022" },
+            { title: "2021", value: "2021" },
+            { title: "2020", value: "2020" },
+            { title: "2019", value: "2019" },
+            { title: "2018", value: "2018" },
+            { title: "2017", value: "2017" },
+            { title: "2016", value: "2016" },
+            { title: "20年代", value: "120" },
+            { title: "10年代", value: "110" },
+            { title: "00年代", value: "100" },
+            { title: "90年代", value: "90" },
           ],
         },
       ],
@@ -100,10 +249,13 @@ function cleanTVTitle(title) {
 
 /**
  * 获取某一页的 JSON 数据，使用 /res/mv 或 /res/tv API
- * 参数格式：year=120&sort=addtime&rrange=6_10&srange=5000&page={page}
+ * 支持可选筛选参数：genre（类型）、area（地区）、year（年代）
  */
-async function fetchGying(type, page, sort, cookieString) {
-  const url = `${BASE_URL}/res/${type}?year=120&sort=${sort}&rrange=6_10&srange=5000&page=${page}`;
+async function fetchGying(type, page, sort, cookieString, filters = {}) {
+  let url = `${BASE_URL}/res/${type}?sort=${sort}&rrange=6_10&srange=5000&page=${page}`;
+  if (filters.year) url += `&year=${encodeURIComponent(filters.year)}`;
+  if (filters.genre) url += `&genre=${encodeURIComponent(filters.genre)}`;
+  if (filters.area) url += `&region=${encodeURIComponent(filters.area)}`;
   try {
     const response = await Widget.http.get(url, {
       headers: {
@@ -163,15 +315,21 @@ async function fetchRecent(gyingType, mediaType, params) {
 
   const forwardPage = params.page || 1;
   const sort = params.sort_by || "addtime";
+  const filters = {
+    year: params.year || "",
+    genre: params.genre || "",
+    area: params.area || "",
+  };
 
   // 计算对应的 Gying 真实页码和切片位置
   const gyingPage = Math.ceil(forwardPage / FORWARD_PAGES_PER_GYING);
   const sliceStart = ((forwardPage - 1) % FORWARD_PAGES_PER_GYING) * ITEMS_PER_FORWARD_PAGE;
   const sliceEnd = sliceStart + ITEMS_PER_FORWARD_PAGE;
 
-  console.log(`Forward 第 ${forwardPage} 页 → Gying 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort}）`);
+  const filterLog = [filters.year, filters.genre, filters.area].filter(Boolean).join("/") || "无筛选";
+  console.log(`Forward 第 ${forwardPage} 页 → Gying 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
 
-  const raw = await fetchGying(gyingType, gyingPage, sort, cookieString);
+  const raw = await fetchGying(gyingType, gyingPage, sort, cookieString, filters);
 
   if (!raw) {
     console.error("请求失败，请检查 Cookie 是否有效");
