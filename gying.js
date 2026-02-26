@@ -160,6 +160,17 @@ WidgetMetadata = {
             { title: "100万人以上", value: "1000000" },
           ],
         },
+        {
+          name: "quality",
+          title: "画质",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "720P", value: "720P" },
+            { title: "1080P", value: "1080P" },
+            { title: "4K", value: "4K" },
+          ],
+        },
       ],
     },
     {
@@ -286,6 +297,17 @@ WidgetMetadata = {
             { title: "20万人以上", value: "200000" },
             { title: "50万人以上", value: "500000" },
             { title: "100万人以上", value: "1000000" },
+          ],
+        },
+        {
+          name: "quality",
+          title: "画质",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "720P", value: "720P" },
+            { title: "1080P", value: "1080P" },
+            { title: "4K", value: "4K" },
           ],
         },
       ],
@@ -430,6 +452,17 @@ WidgetMetadata = {
             { title: "100万人以上", value: "1000000" },
           ],
         },
+        {
+          name: "quality",
+          title: "画质",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部", value: "" },
+            { title: "720P", value: "720P" },
+            { title: "1080P", value: "1080P" },
+            { title: "4K", value: "4K" },
+          ],
+        },
       ],
     },
   ],
@@ -495,6 +528,7 @@ async function fetchGying(type, page, sort, cookieString, filters = {}) {
   if (filters.year) url += `&year=${encodeURIComponent(filters.year)}`;
   if (filters.genre) url += `&genre=${encodeURIComponent(filters.genre)}`;
   if (filters.area) url += `&region=${encodeURIComponent(filters.area)}`;
+  if (filters.quality) url += `&quality=${encodeURIComponent(filters.quality)}`;
   try {
     const response = await Widget.http.get(url, {
       headers: {
@@ -567,6 +601,7 @@ async function fetchRecent(gyingType, mediaType, params) {
     area: params.area || "",
     rrange: params.rrange || "6_10",
     srange: params.srange || "5000",
+    quality: params.quality || "",
   };
 
   // 计算对应的 Gying 真实页码和切片位置
