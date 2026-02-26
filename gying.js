@@ -122,6 +122,41 @@ WidgetMetadata = {
             { title: "90年代", value: "90" },
           ],
         },
+        {
+          name: "rrange",
+          title: "评分区间",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部 (0-10)", value: "0_10" },
+            { title: "1分以上", value: "1_10" },
+            { title: "2分以上", value: "2_10" },
+            { title: "3分以上", value: "3_10" },
+            { title: "4分以上", value: "4_10" },
+            { title: "5分以上", value: "5_10" },
+            { title: "6分以上（默认）", value: "6_10" },
+            { title: "7分以上", value: "7_10" },
+            { title: "8分以上", value: "8_10" },
+            { title: "9分以上", value: "9_10" },
+            { title: "仅10分", value: "10_10" },
+          ],
+        },
+        {
+          name: "srange",
+          title: "评分人数",
+          type: "enumeration",
+          enumOptions: [
+            { title: "不限", value: "0" },
+            { title: "1000人以上", value: "1000" },
+            { title: "5000人以上（默认）", value: "5000" },
+            { title: "1万人以上", value: "10000" },
+            { title: "2万人以上", value: "20000" },
+            { title: "5万人以上", value: "50000" },
+            { title: "10万人以上", value: "100000" },
+            { title: "20万人以上", value: "200000" },
+            { title: "50万人以上", value: "500000" },
+            { title: "100万人以上", value: "1000000" },
+          ],
+        },
       ],
     },
     {
@@ -212,6 +247,41 @@ WidgetMetadata = {
             { title: "90年代", value: "90" },
           ],
         },
+        {
+          name: "rrange",
+          title: "评分区间",
+          type: "enumeration",
+          enumOptions: [
+            { title: "全部 (0-10)", value: "0_10" },
+            { title: "1分以上", value: "1_10" },
+            { title: "2分以上", value: "2_10" },
+            { title: "3分以上", value: "3_10" },
+            { title: "4分以上", value: "4_10" },
+            { title: "5分以上", value: "5_10" },
+            { title: "6分以上（默认）", value: "6_10" },
+            { title: "7分以上", value: "7_10" },
+            { title: "8分以上", value: "8_10" },
+            { title: "9分以上", value: "9_10" },
+            { title: "仅10分", value: "10_10" },
+          ],
+        },
+        {
+          name: "srange",
+          title: "评分人数",
+          type: "enumeration",
+          enumOptions: [
+            { title: "不限", value: "0" },
+            { title: "1000人以上", value: "1000" },
+            { title: "5000人以上（默认）", value: "5000" },
+            { title: "1万人以上", value: "10000" },
+            { title: "2万人以上", value: "20000" },
+            { title: "5万人以上", value: "50000" },
+            { title: "10万人以上", value: "100000" },
+            { title: "20万人以上", value: "200000" },
+            { title: "50万人以上", value: "500000" },
+            { title: "100万人以上", value: "1000000" },
+          ],
+        },
       ],
     },
   ],
@@ -252,7 +322,7 @@ function cleanTVTitle(title) {
  * 支持可选筛选参数：genre（类型）、area（地区）、year（年代）
  */
 async function fetchGying(type, page, sort, cookieString, filters = {}) {
-  let url = `${BASE_URL}/res/${type}?sort=${sort}&rrange=6_10&srange=5000&page=${page}`;
+  let url = `${BASE_URL}/res/${type}?sort=${sort}&rrange=${filters.rrange || "6_10"}&srange=${filters.srange || "5000"}&page=${page}`;
   if (filters.year) url += `&year=${encodeURIComponent(filters.year)}`;
   if (filters.genre) url += `&genre=${encodeURIComponent(filters.genre)}`;
   if (filters.area) url += `&region=${encodeURIComponent(filters.area)}`;
@@ -319,6 +389,8 @@ async function fetchRecent(gyingType, mediaType, params) {
     year: params.year || "",
     genre: params.genre || "",
     area: params.area || "",
+    rrange: params.rrange || "6_10",
+    srange: params.srange || "5000",
   };
 
   // 计算对应的 Gying 真实页码和切片位置
