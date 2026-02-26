@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.0.4",
+  version: "4.0.5",
   requiredVersion: "0.0.1",
   description: "获取 Gying.si 影视数据，滚动加载更多（需配置 Cookie）",
   author: "Antigravity",
@@ -386,8 +386,8 @@ async function searchTMDB(title, mediaType, year) {
  * 效果：每次滚动只做 12 个并发 TMDB 查询（原来 36 个），速度快 3 倍；数据无损
  */
 const ITEMS_PER_FORWARD_PAGE = 12;
-const GYING_ITEMS_PER_PAGE = 36;
-const FORWARD_PAGES_PER_GYING = Math.ceil(GYING_ITEMS_PER_PAGE / ITEMS_PER_FORWARD_PAGE); // = 3
+const GYING_ITEMS_PER_PAGE = 60;                                               // Gying 每页实际返回 60 部
+const FORWARD_PAGES_PER_GYING = Math.ceil(GYING_ITEMS_PER_PAGE / ITEMS_PER_FORWARD_PAGE); // = 5
 
 async function fetchRecent(gyingType, mediaType, params) {
   const cookieString = parseCookieInput(params.cookie || "");
