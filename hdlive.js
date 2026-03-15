@@ -234,44 +234,51 @@ async function decryptPayload(encryptedText, cookieString) {
 }
 
 /**
- * 简化版数据格式封装，直接使用 HDHive 数据，极速响应。
- * 核心要求：id 必须为纯数字(tmdb_id)且只靠 id 交给 Forward 自己聚合，不传 link。
+ * 根据 tmdb_id 调用 Widget.tmdb.get() 获取官方数据，严格按 gying.js 格式返回
+ * 关键：1) 必须调用 Widget.tmdb.get() 让 Forward 内部注册/识别该影片
+ *        2) id 用 tmdb.id 纯数字，不能用字符串
+ *        3) 不能加 link 字段（加了 Forward 会把站点 URL 当视频源）
+ * @param {Object} item - HDHive 返回的单条电影数据
  */
-function normalizeMovieItem(item) {
+async function enrichWithTMDB(item) {
   if (!item || item.type !== "movie") {
     return null;
   }
 
-  const slug = item.slug || "";
-  const link = slug ? `${BASE_URL}${MOVIE_PATH}/${slug}` : `${BASE_URL}${MOVIE_PATH}`;
   const tmdbIdNum = item.tmdb_id ? Number(item.tmdb_id) : 0;
   const posterFallback = item.poster_path || "";
   const siteRating = item.douban_rating || item.imdb_rating || 0;
 
   if (tmdbIdNum) {
-    return {
-      id: tmdbIdNum,         // 直接返回数字形式的 TMDB ID
-      type: "tmdb",          // 交给 Forward
-      title: item.title || "",
-      originalTitle: item.original_title || "",
-      description: item.overview || "",
-      releaseDate: item.release_date || "",
-      posterPath: posterFallback,
-      backdropPath: item.backdrop_path || "",
-      rating: siteRating,
-      mediaType: "movie"
-    };
+    try {
+      // 必须通过 Widget.tmdb.get 获取，让 Forward 内部注册该 TMDB 条目
+      // 这是 gying.js / butailing.js 能正常聚合视频的核心原因
+      const tmdb = await Widget.tmdb.get(`movie/${tmdbIdNum}`, {
+        params: { language: "zh-CN" }
+      });
+      if (tmdb) {
+        return {
+          id: tmdb.id,                                          // 纯数字，和 gying.js 一致
+          type: "tmdb",
+          title: tmdb.title || tmdb.name || item.title || "",
+          originalTitle: tmdb.original_title || tmdb.original_name || "",
+          description: tmdb.overview || "",
+          releaseDate: tmdb.release_date || tmdb.first_air_date || "",
+          posterPath: tmdb.poster_path || posterFallback,
+          backdropPath: tmdb.backdrop_path || "",
+          rating: tmdb.vote_average || siteRating,
+          mediaType: "movie"
+          // 注意：不加 link 字段！加了 Forward 会用 HDHive 页面 URL 代替视频聚合
+        };
+      }
+    } catch (err) {
+      console.error(`Widget.tmdb.get 失败 (ID: ${tmdbIdNum})`, err);
+    }
   }
 
-  return {
-    id: link,
-    type: "url",
-    title: item.title || "",
-    posterPath: posterFallback,
-    rating: siteRating,
-    description: item.overview || "",
-    link: link
-  };
+  // 降级：无 tmdb_id 或查询失败
+  console.log(`"${item.title}" TMDB 查询失败，跳过`);
+  return null;
 }
 
 async function recentMovies(params) {
