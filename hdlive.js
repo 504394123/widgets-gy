@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.hdlive",
   title: "HDHive影视",
-  version: "1.2.0",
+  version: "1.2.1",
   requiredVersion: "0.0.1",
   description: "获取 HDHive 电影列表，仅使用下方实时更新列表，不解析顶部轮播",
   author: "Antigravity",
