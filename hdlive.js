@@ -36,6 +36,7 @@ const BASE_URL = "https://hdhive.com";
 const MOVIE_PATH = "/movie";
 const MOVIE_API_PATH = "/api/public/movies";
 const PAGE_SIZE = 40;
+const DECRYPT_ACTION_ID_FALLBACK = "405f0ab232fa844d7038944a5a0928f8a696add970";
 
 // 动态 Action ID 缓存，避免每次都请求页面
 let _cachedActionId = null;
@@ -54,18 +55,19 @@ async function fetchDecryptActionId(cookieString) {
     html = typeof pageResp.data === "string" ? pageResp.data : "";
   } catch (err) {
     console.error("HDHive 获取页面失败", err);
-    return null;
+    _cachedActionId = DECRYPT_ACTION_ID_FALLBACK;
+    return _cachedActionId;
   }
 
   // 提取所有 /_next/static/chunks/*.js 路径（去重）
-  const chunkPattern = /\/_next\/static\/chunks\/[\w\-\.]+\.js/g;
+  const chunkPattern = /\/_next\/static\/chunks\/[^"'<> ]+\.js/g;
   const allMatches = html.match(chunkPattern) || [];
   const chunkPaths = [...new Set(allMatches)];
 
   // 第二步：遍历 chunk，精准匹配函数名为 "decrypt" 的 Server Action ID
   // 实际 JS 格式: (0,k.createServerReference)("40[40位hex]",k.callServer,void 0,k.findSourceMapURL,"decrypt")
   // encrypte 函数只会把数据再次加密（无用），checkIn 是签到，两者都要排除
-  const precisePattern = /\"(40[0-9a-f]{40})\"[^"]+\"decrypt\"/;
+  const precisePattern = /["'](40[0-9a-fA-F]{40})["'][\s\S]{0,240}?["']decrypt["']/;
   for (let i = 0; i < chunkPaths.length; i++) {
     try {
       const chunkResp = await Widget.http.get(`${BASE_URL}${chunkPaths[i]}`, {
@@ -84,8 +86,9 @@ async function fetchDecryptActionId(cookieString) {
     }
   }
 
-  console.error("HDHive 未能自动获取 Next-Action ID");
-  return null;
+  console.error("HDHive 未能自动获取 Next-Action ID，使用内置备用 ID");
+  _cachedActionId = DECRYPT_ACTION_ID_FALLBACK;
+  return _cachedActionId;
 }
 
 function parseCookieInput(input) {
@@ -233,51 +236,27 @@ async function decryptPayload(encryptedText, cookieString) {
   return decrypted;
 }
 
-/**
- * 根据 tmdb_id 调用 Widget.tmdb.get() 获取官方数据，严格按 gying.js 格式返回
- * 关键：1) 必须调用 Widget.tmdb.get() 让 Forward 内部注册/识别该影片
- *        2) id 用 tmdb.id 纯数字，不能用字符串
- *        3) 不能加 link 字段（加了 Forward 会把站点 URL 当视频源）
- * @param {Object} item - HDHive 返回的单条电影数据
- */
-async function enrichWithTMDB(item) {
+function normalizeMovieItem(item) {
   if (!item || item.type !== "movie") {
     return null;
   }
 
   const tmdbIdNum = item.tmdb_id ? Number(item.tmdb_id) : 0;
-  const posterFallback = item.poster_path || "";
-  const siteRating = item.douban_rating || item.imdb_rating || 0;
 
   if (tmdbIdNum) {
-    try {
-      // 必须通过 Widget.tmdb.get 获取，让 Forward 内部注册该 TMDB 条目
-      // 这是 gying.js / butailing.js 能正常聚合视频的核心原因
-      const tmdb = await Widget.tmdb.get(`movie/${tmdbIdNum}`, {
-        params: { language: "zh-CN" }
-      });
-      if (tmdb) {
-        return {
-          id: tmdb.id,                                          // 纯数字，和 gying.js 一致
-          type: "tmdb",
-          title: tmdb.title || tmdb.name || item.title || "",
-          originalTitle: tmdb.original_title || tmdb.original_name || "",
-          description: tmdb.overview || "",
-          releaseDate: tmdb.release_date || tmdb.first_air_date || "",
-          posterPath: tmdb.poster_path || posterFallback,
-          backdropPath: tmdb.backdrop_path || "",
-          rating: tmdb.vote_average || siteRating,
-          mediaType: "movie"
-          // 注意：不加 link 字段！加了 Forward 会用 HDHive 页面 URL 代替视频聚合
-        };
-      }
-    } catch (err) {
-      console.error(`Widget.tmdb.get 失败 (ID: ${tmdbIdNum})`, err);
-    }
+    return {
+      id: tmdbIdNum,
+      type: "tmdb",
+      title: item.title || "",
+      releaseDate: item.release_date || "",
+      posterPath: item.poster_path || "",
+      backdropPath: item.backdrop_path || "",
+      rating: item.tmdb_rating || item.douban_rating || item.imdb_rating || 0,
+      mediaType: "movie"
+    };
   }
 
-  // 降级：无 tmdb_id 或查询失败
-  console.log(`"${item.title}" TMDB 查询失败，跳过`);
+  console.log(`"${item.title}" 缺少 tmdb_id，跳过`);
   return null;
 }
 
@@ -297,9 +276,9 @@ async function recentMovies(params) {
     return [];
   }
 
-  // 并发调用 Widget.tmdb.get，和 gying.js 一样
-  const promises = decryptedItems.map(item => enrichWithTMDB(item));
-  const results = (await Promise.all(promises)).filter(Boolean);
+  const results = decryptedItems
+    .map(normalizeMovieItem)
+    .filter(Boolean);
 
   console.log(`HDHive 第 ${page} 页返回 ${results.length} 部电影`);
   return results;
