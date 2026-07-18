@@ -1,29 +1,18 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.5.0",
+  version: "4.6.0",
   requiredVersion: "0.0.1",
-  description: "获取 教父.com 完整分类影视列表；支持 Cookie 或账号密码登录",
+  description: "获取 教父.com 完整分类影视列表；需导入已登录浏览器的完整 Cookie",
   author: "Antigravity",
   site: "https://www.xn--wcv59z.com/",
   detailCacheDuration: 3600,
   globalParams: [
     {
-      name: "authMode",
-      title: "登录方式",
-      type: "enumeration",
-      value: "cookie",
-      enumOptions: [
-        { title: "Cookie", value: "cookie" },
-        { title: "账号密码", value: "account" },
-      ],
-    },
-    {
       name: "cookie",
       title: "Cookie",
       type: "input",
-      description: "填写新站当前 Cookie（至少包含 app_auth）；验证失效时尝试 PoW 刷新，宿主不返回 Set-Cookie 时需重新导入",
-      belongTo: { paramName: "authMode", value: ["cookie"] },
+      description: "从已登录且已完成安全验证的浏览器导出，必须同时包含 app_auth 和 browser_verified",
       placeholders: [
         {
           title: "JSON 格式（推荐）",
@@ -32,28 +21,14 @@ WidgetMetadata = {
       ]
     },
     {
-      name: "username",
-      title: "账号/邮箱",
-      type: "input",
-      description: "仅用于本次登录请求，不写入脚本或 Widget.storage",
-      belongTo: { paramName: "authMode", value: ["account"] },
-    },
-    {
-      name: "password",
-      title: "密码（普通文本）",
-      type: "input",
-      description: "Forward 暂无密码框；内容可能出现在本地配置或调试日志中",
-      belongTo: { paramName: "authMode", value: ["account"] },
-    },
-    {
       name: "userAgent",
-      title: "User-Agent（可选）",
+      title: "浏览器 User-Agent（必填）",
       type: "input",
-      description: "browser_verified 会绑定 User-Agent；反复提示过期时，填写导出 Cookie 时同一浏览器的完整 User-Agent",
+      description: "必须与导出 Cookie 的浏览器完全一致，可从 Chrome 的 chrome://version 页面复制",
       placeholders: [
         {
-          title: "Chrome 120（内置默认）",
-          value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          title: "本机 Chrome 150 示例",
+          value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
         }
       ]
     }
@@ -508,20 +483,18 @@ WidgetMetadata = {
 
 const BASE_URL = "https://www.xn--wcv59z.com";
 const IMG_BASE = "https://s.tutu.pm/img";
-const DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-const VERIFICATION_COOKIE_NAMES = new Set(["browser_verified", "browser_pow"]);
-const POW_CACHE_TTL_MS = 20 * 60 * 60 * 1000;
-const LOGIN_CACHE_TTL_MS = 60 * 60 * 1000;
-// The live site currently sends 2048-bit values and t=400000. Keep bounded
-// headroom, but reject pathological challenges before BigInt allocates.
-const POW_MAX_ITERATIONS = 800000;
-const POW_MAX_HEX_LENGTH = 768;
-const POW_BATCH_SIZE = 8192;
-const POW_MIN_DURATION_MS = 3000;
-const verificationCache = new Map();
-const verificationInFlight = new Map();
-const loginCache = new Map();
-const loginInFlight = new Map();
+const TARGET_COOKIE_DOMAIN = "xn--wcv59z.com";
+
+function isTargetCookieDomain(value) {
+  const domain = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^#httponly_/, "")
+    .replace(/^\./, "");
+  return !domain
+    || domain === TARGET_COOKIE_DOMAIN
+    || domain.endsWith(`.${TARGET_COOKIE_DOMAIN}`);
+}
 
 /**
  * 将用户输入的 Cookie 转换为 "name=value; name=value" 格式
@@ -546,7 +519,11 @@ function parseCookieInput(input) {
             value: parsed[name],
           }))));
       entries.forEach((cookie) => {
-        if (cookie && cookie.name && cookie.value !== undefined && cookie.value !== null) {
+        if (cookie
+          && isTargetCookieDomain(cookie.domain || cookie.host)
+          && cookie.name
+          && cookie.value !== undefined
+          && cookie.value !== null) {
           cookies.set(String(cookie.name).trim(), String(cookie.value));
         }
       });
@@ -572,10 +549,14 @@ function parseCookieInput(input) {
     text = text.replace(/^(?:Cookie|Set-Cookie)\s*:\s*/i, "").trim();
     const fields = text.split("\t");
     if (fields.length >= 7 && fields[5] && fields[6]) {
-      cookies.set(fields[5].trim(), fields[6].trim());
+      if (isTargetCookieDomain(fields[0])) {
+        cookies.set(fields[5].trim(), fields[6].trim());
+      }
       return;
     }
     if (text.startsWith("#")) return;
+    const domainAttribute = text.match(/(?:^|;)\s*domain\s*=\s*([^;]+)/i);
+    if (domainAttribute && !isTargetCookieDomain(domainAttribute[1])) return;
     text.split(";").forEach((part) => {
       const separator = part.indexOf("=");
       if (separator <= 0) return;
@@ -603,192 +584,9 @@ function parseCookieMap(cookieString) {
   return cookies;
 }
 
-function serializeCookieMap(cookies) {
-  return Array.from(cookies.values())
-    .map((cookie) => `${cookie.name}=${cookie.value}`)
-    .join("; ");
-}
-
-function withoutVerificationCookies(cookieString) {
-  const cookies = parseCookieMap(cookieString);
-  VERIFICATION_COOKIE_NAMES.forEach((name) => cookies.delete(name));
-  return serializeCookieMap(cookies);
-}
-
 function hasCookie(cookieString, name) {
-  return parseCookieMap(cookieString).has(String(name || "").toLowerCase());
-}
-
-function splitSetCookieHeader(value) {
-  if (Array.isArray(value)) {
-    return value.reduce((all, item) => all.concat(splitSetCookieHeader(item)), []);
-  }
-  if (value && typeof value === "object") {
-    if (value.value !== undefined) return splitSetCookieHeader(value.value);
-    if (value.values !== undefined) return splitSetCookieHeader(value.values);
-  }
-  if (value === null || value === undefined) return [];
-  const text = String(value).trim();
-  if (!text) return [];
-  // Headers.get() may combine multiple Set-Cookie values. Expires dates contain
-  // commas too, so split only when the next token looks like another cookie.
-  return text.split(/,(?=\s*[^;,=\s]+\s*=)/g).map((item) => item.trim()).filter(Boolean);
-}
-
-function getHeaderValue(headers, name) {
-  if (!headers) return null;
-  if (typeof headers === "string") {
-    try {
-      return getHeaderValue(JSON.parse(headers), name);
-    } catch (_error) {
-      const wanted = String(name || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const values = [];
-      const pattern = new RegExp(`^\\s*${wanted}\\s*:\\s*(.*)$`, "i");
-      String(headers).split(/\r?\n/).forEach((line) => {
-        const match = line.match(pattern);
-        if (match) values.push(match[1]);
-      });
-      if (values.length === 1) return values[0];
-      if (values.length > 1) return values;
-      return null;
-    }
-  }
-  const wanted = String(name || "").toLowerCase();
-
-  if (typeof headers.get === "function") {
-    try {
-      const value = headers.get(name) || headers.get(wanted);
-      if (value !== null && value !== undefined) return value;
-    } catch (_error) {}
-  }
-
-  if (typeof headers.forEach === "function") {
-    const values = [];
-    try {
-      headers.forEach((value, key) => {
-        if (String(key).toLowerCase() === wanted) values.push(value);
-      });
-    } catch (_error) {}
-    if (values.length > 0) return values;
-  }
-
-  if (typeof headers.entries === "function") {
-    const values = [];
-    try {
-      for (const entry of headers.entries()) {
-        if (Array.isArray(entry) && String(entry[0]).toLowerCase() === wanted) {
-          values.push(entry[1]);
-        }
-      }
-    } catch (_error) {}
-    if (values.length > 0) return values;
-  }
-
-  if (Array.isArray(headers)) {
-    const values = [];
-    headers.forEach((entry) => {
-      if (typeof entry === "string") {
-        const separator = entry.indexOf(":");
-        if (separator > 0 && entry.slice(0, separator).trim().toLowerCase() === wanted) {
-          values.push(entry.slice(separator + 1).trim());
-        }
-      } else if (Array.isArray(entry) && String(entry[0]).toLowerCase() === wanted) {
-        values.push(entry[1]);
-      } else if (entry && typeof entry === "object") {
-        const key = entry.name !== undefined ? entry.name : entry.key;
-        if (key !== undefined && String(key).toLowerCase() === wanted) {
-          values.push(entry.value !== undefined ? entry.value : entry.val);
-        }
-      }
-    });
-    if (values.length > 0) return values;
-  }
-
-  if (typeof headers === "object") {
-    const key = Object.keys(headers).find((candidate) => candidate.toLowerCase() === wanted);
-    if (key) return headers[key];
-  }
-  return null;
-}
-
-function cookieRecordToLine(record) {
-  if (!record || typeof record !== "object") return null;
-  const name = record.name !== undefined ? record.name : record.key;
-  const value = record.value !== undefined ? record.value : record.val;
-  if (!name || /^set-cookie$/i.test(String(name)) || value === undefined || value === null) {
-    return null;
-  }
-  let line = `${String(name).trim()}=${String(value)}`;
-  if (record.expires) line += `; Expires=${record.expires}`;
-  if (record.maxAge !== undefined) line += `; Max-Age=${record.maxAge}`;
-  return line;
-}
-
-function getSetCookieLines(response) {
-  const values = [];
-  const seen = new Set();
-  const add = (line) => {
-    if (!line || seen.has(line)) return;
-    seen.add(line);
-    values.push(line);
-  };
-  [
-    response && response.headers,
-    response && response.header,
-    response && response.responseHeaders,
-    response && response.meta && response.meta.headers,
-    response && response.meta && response.meta.responseHeaders,
-  ].forEach((headers) => {
-    const value = getHeaderValue(headers, "set-cookie");
-    splitSetCookieHeader(value).forEach(add);
-  });
-
-  // Some Forward builds expose parsed cookies separately from response
-  // headers, either as [{name, value}] or as a name -> value map.
-  [
-    response && response.cookies,
-    response && response.cookie,
-    response && response.meta && response.meta.cookies,
-  ].forEach((cookies) => {
-    if (Array.isArray(cookies)) {
-      cookies.forEach((cookie) => add(cookieRecordToLine(cookie)));
-    } else if (cookies && typeof cookies === "object") {
-      const direct = cookieRecordToLine(cookies);
-      if (direct) add(direct);
-      else Object.keys(cookies).forEach((name) => {
-        if (cookies[name] !== undefined && cookies[name] !== null) {
-          add(`${name}=${cookies[name]}`);
-        }
-      });
-    } else if (typeof cookies === "string") {
-      splitSetCookieHeader(cookies).forEach(add);
-    }
-  });
-  return values;
-}
-
-function mergeCookieStrings(cookieString, setCookieLines) {
-  const cookies = parseCookieMap(cookieString);
-  splitSetCookieHeader(setCookieLines).forEach((line) => {
-    const parts = String(line).split(";");
-    const pair = parts.shift().trim();
-    const separator = pair.indexOf("=");
-    if (separator <= 0) return;
-
-    const name = pair.slice(0, separator).trim();
-    const value = pair.slice(separator + 1).trim();
-    const attributes = parts.join(";");
-    const maxAge = attributes.match(/(?:^|;)\s*max-age\s*=\s*(-?\d+)/i);
-    const expires = attributes.match(/(?:^|;)\s*expires\s*=\s*([^;]+)/i);
-    const expiresAt = expires ? Date.parse(expires[1].trim()) : NaN;
-    const deleted = (maxAge && Number(maxAge[1]) <= 0)
-      || (Number.isFinite(expiresAt) && expiresAt <= Date.now())
-      || value === "";
-    const key = name.toLowerCase();
-    if (deleted) cookies.delete(key);
-    else cookies.set(key, { name: name, value: value });
-  });
-  return serializeCookieMap(cookies);
+  const cookie = parseCookieMap(cookieString).get(String(name || "").toLowerCase());
+  return Boolean(cookie && cookie.value);
 }
 
 function responseData(response) {
@@ -869,7 +667,7 @@ function cleanAnimeTitle(title) {
  * 支持可选筛选参数：genre（类型）、area（地区）、year（年代）
  */
 function normalizeUserAgent(value) {
-  return String(value || "").replace(/[\r\n]+/g, " ").trim() || DEFAULT_USER_AGENT;
+  return String(value || "").replace(/[\r\n]+/g, " ").trim();
 }
 
 function buildHeaders(cookieString, extraHeaders = {}, userAgent = "") {
@@ -910,252 +708,12 @@ async function fetchGying(type, page, sort, cookieString, filters = {}, options 
     // verification-expiry detector. getListData unwraps `.data` below.
     return response;
   } catch (err) {
-    console.error(`请求 ${url} 失败: ${safeErrorMessage(err)}`);
+    console.error(`请求 ${url} 失败: ${safeErrorMessage(err, [cookieString])}`);
     // Keep the original error so callers can inspect HTTP status fields such
     // as error.response.status instead of mistaking every failure for an
     // ordinary empty response.
     return err || { message: "网络请求失败" };
   }
-}
-
-function normalizeHex(value, fieldName) {
-  const text = String(value || "").trim().replace(/^0x/i, "");
-  if (!text || !/^[0-9a-f]+$/i.test(text)) {
-    throw new Error(`浏览器验证挑战 ${fieldName} 无效`);
-  }
-  if (text.length > POW_MAX_HEX_LENGTH) {
-    throw new Error(`浏览器验证挑战 ${fieldName} 过大`);
-  }
-  return text;
-}
-
-function yieldExecution() {
-  if (typeof setTimeout === "function") {
-    return new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  return Promise.resolve();
-}
-
-async function waitForMinimumDuration(startedAt, durationMs) {
-  const deadline = startedAt + durationMs;
-  if (Date.now() >= deadline) return;
-  if (typeof setTimeout === "function") {
-    await new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now())));
-    return;
-  }
-
-  // There is no reliable non-blocking timer fallback in older JSCore hosts.
-  // Finish immediately there rather than busy-waiting and freezing Forward;
-  // current Forward builds expose setTimeout and take the timed path above.
-}
-
-async function solveProofOfWork(challenge) {
-  if (typeof BigInt !== "function") {
-    throw new Error("当前 Forward 运行环境不支持 BigInt，无法完成浏览器验证");
-  }
-
-  const modulusHex = normalizeHex(challenge && challenge.N, "N");
-  const seedHex = normalizeHex(challenge && challenge.x, "x");
-  const iterations = Number(challenge && challenge.t);
-  if (!Number.isSafeInteger(iterations) || iterations < 0 || iterations > POW_MAX_ITERATIONS) {
-    throw new Error("浏览器验证挑战计算次数超出支持范围");
-  }
-
-  const modulus = BigInt(`0x${modulusHex}`);
-  if (modulus <= BigInt(1)) throw new Error("浏览器验证挑战模数无效");
-
-  let result = BigInt(`0x${seedHex}`) % modulus;
-  const startedAt = Date.now();
-  for (let index = 0; index < iterations; index += 1) {
-    result = (result * result) % modulus;
-    if ((index + 1) % POW_BATCH_SIZE === 0) await yieldExecution();
-  }
-  await waitForMinimumDuration(startedAt, POW_MIN_DURATION_MS);
-  return result.toString(16);
-}
-
-function verificationCacheKey(cookieString, userAgent) {
-  const cookieKey = withoutVerificationCookies(cookieString) || "__anonymous__";
-  return `${cookieKey}\n${normalizeUserAgent(userAgent)}`;
-}
-
-function invalidateVerificationCache(cookieString, userAgent) {
-  verificationCache.delete(verificationCacheKey(cookieString, userAgent));
-}
-
-async function performBrowserVerification(cookieString, userAgent) {
-  const baseCookie = withoutVerificationCookies(cookieString);
-  const pageHeaders = buildHeaders(baseCookie, {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "X-Requested-With": null,
-  }, userAgent);
-  const pageResponse = await Widget.http.get(`${BASE_URL}/mv`, {
-    headers: pageHeaders,
-  });
-  let sessionCookie = mergeCookieStrings(baseCookie, getSetCookieLines(pageResponse));
-
-  const challengeResponse = await Widget.http.get(`${BASE_URL}/res/pow`, {
-    headers: buildHeaders(sessionCookie, {
-      "Accept": "application/json, text/plain, */*",
-      "X-Requested-With": null,
-    }, userAgent),
-  });
-  sessionCookie = mergeCookieStrings(sessionCookie, getSetCookieLines(challengeResponse));
-  if (!hasCookie(sessionCookie, "browser_pow")) {
-    throw new Error("Forward 未暴露 browser_pow Cookie；请重新导入完整有效 Cookie，或升级到支持响应 Cookie 的版本");
-  }
-  const challenge = responseData(challengeResponse);
-  if (!challenge || typeof challenge !== "object") {
-    throw new Error("浏览器验证挑战响应为空");
-  }
-
-  const proof = await solveProofOfWork(challenge);
-  const verifyResponse = await Widget.http.post(
-    `${BASE_URL}/res/pow`,
-    `y=${encodeURIComponent(proof)}`,
-    {
-      headers: buildHeaders(sessionCookie, {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "X-Requested-With": null,
-      }, userAgent),
-    }
-  );
-  const verification = responseData(verifyResponse);
-  if (!verification || verification.success !== true) {
-    throw new Error("浏览器验证未通过");
-  }
-
-  sessionCookie = mergeCookieStrings(sessionCookie, getSetCookieLines(verifyResponse));
-  const hasExplicitVerificationCookie = hasCookie(sessionCookie, "browser_verified");
-  if (!hasExplicitVerificationCookie) {
-    throw new Error("Forward 未暴露 browser_verified Cookie；请重新导入完整有效 Cookie，或升级到支持响应 Cookie 的版本");
-  }
-  return {
-    cookieString: sessionCookie,
-    hasExplicitVerificationCookie: hasExplicitVerificationCookie,
-  };
-}
-
-async function refreshBrowserVerification(cookieString, userAgent) {
-  const key = verificationCacheKey(cookieString, userAgent);
-  const cached = verificationCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached;
-  if (verificationInFlight.has(key)) return await verificationInFlight.get(key);
-
-  const promise = performBrowserVerification(cookieString, userAgent)
-    .then((refreshed) => {
-      if (refreshed.hasExplicitVerificationCookie) {
-        verificationCache.set(key, {
-          cookieString: refreshed.cookieString,
-          hasExplicitVerificationCookie: true,
-          expiresAt: Date.now() + POW_CACHE_TTL_MS,
-        });
-      }
-      return refreshed;
-    })
-    .finally(() => verificationInFlight.delete(key));
-  verificationInFlight.set(key, promise);
-  return await promise;
-}
-
-function encodeForm(fields) {
-  return Object.keys(fields || {}).map((name) => {
-    const value = fields[name] === null || fields[name] === undefined ? "" : fields[name];
-    return `${encodeURIComponent(name)}=${encodeURIComponent(String(value))}`;
-  }).join("&");
-}
-
-function fingerprintText(value) {
-  const text = String(value || "");
-  let first = 0x811c9dc5;
-  let second = 0x9e3779b9;
-  for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
-    first = Math.imul(first ^ code, 0x01000193);
-    second = Math.imul(second ^ code, 0x5bd1e995);
-    second ^= second >>> 13;
-  }
-  return `${text.length}:${(first >>> 0).toString(16)}:${(second >>> 0).toString(16)}`;
-}
-
-function credentialFingerprint(username, password, userAgent) {
-  return [username, password, normalizeUserAgent(userAgent)]
-    .map((value) => fingerprintText(value))
-    .join(":");
-}
-
-async function performCredentialLogin(username, password, userAgent) {
-  const verification = await refreshBrowserVerification("", userAgent);
-  if (!verification || !verification.hasExplicitVerificationCookie) {
-    throw new Error("Forward 未暴露 browser_verified Cookie，无法建立登录会话");
-  }
-
-  const response = await Widget.http.post(
-    `${BASE_URL}/user/login`,
-    encodeForm({
-      code: "",
-      siteid: 1,
-      dosubmit: 1,
-      cookietime: 10506240,
-      username: username,
-      password: password,
-    }),
-    {
-      allow_redirects: false,
-      headers: buildHeaders(verification.cookieString, {
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": BASE_URL,
-        "Referer": `${BASE_URL}/user/login`,
-        "X-Requested-With": null,
-      }, userAgent),
-    }
-  );
-  const result = responseData(response);
-  if (result && Number(result.captcha) === 2) {
-    throw new Error("账号登录需要验证码；请先在浏览器完成验证，再改用 Cookie 登录方式");
-  }
-  if (!result || Number(result.code) !== 200) {
-    const reason = result && (result.msg || result.message);
-    throw new Error(reason ? `账号或密码登录失败：${String(reason)}` : "账号或密码登录失败");
-  }
-
-  const responseCookies = mergeCookieStrings("", getSetCookieLines(response));
-  if (!hasCookie(responseCookies, "app_auth")) {
-    throw new Error("登录响应成功，但 Forward 未暴露 app_auth Cookie；请改用 Cookie 登录方式");
-  }
-  return {
-    cookieString: mergeCookieStrings(verification.cookieString, getSetCookieLines(response)),
-  };
-}
-
-async function loginWithCredentials(usernameValue, passwordValue, userAgent) {
-  const username = String(usernameValue || "").trim();
-  const password = passwordValue === null || passwordValue === undefined
-    ? ""
-    : String(passwordValue);
-  if (!username || !password) throw new Error("账号和密码均为必填项");
-  if (username.length > 320) throw new Error("账号长度超出支持范围");
-  if (password.length > 1024) throw new Error("密码长度超出支持范围");
-
-  const key = credentialFingerprint(username, password, userAgent);
-  const cached = loginCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached;
-  if (loginInFlight.has(key)) return await loginInFlight.get(key);
-
-  const promise = performCredentialLogin(username, password, userAgent)
-    .then((session) => {
-      const cachedSession = {
-        cookieString: session.cookieString,
-        expiresAt: Date.now() + LOGIN_CACHE_TTL_MS,
-      };
-      loginCache.set(key, cachedSession);
-      return cachedSession;
-    })
-    .finally(() => loginInFlight.delete(key));
-  loginInFlight.set(key, promise);
-  return await promise;
 }
 
 function getListData(payload) {
@@ -1311,26 +869,20 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
   const forwardPage = Math.max(1, Number(params.page) || 1);
   const sort = params.sort_by || "addtime";
   const userAgent = normalizeUserAgent(params.userAgent || "");
-  const requestedAuthMode = String(params.authMode || "").trim().toLowerCase();
-  const hasCredentialInput = params.username !== undefined || params.password !== undefined;
-  const accountMode = requestedAuthMode === "account"
-    || (!requestedAuthMode && !params.cookie && hasCredentialInput);
-  const credentialSecrets = accountMode ? [params.username, params.password] : [];
-  let authenticatedCookie = "";
-  if (accountMode) {
-    try {
-      const session = await loginWithCredentials(params.username, params.password, userAgent);
-      authenticatedCookie = session.cookieString;
-    } catch (error) {
-      console.error(`账号登录失败：${safeErrorMessage(error, credentialSecrets)}`);
-      return [];
-    }
-  } else {
-    authenticatedCookie = parseCookieInput(params.cookie || "");
-    if (!authenticatedCookie) {
-      console.error("未填写 Cookie，无法获取教父.com 完整分类列表");
-      return [];
-    }
+  const authenticatedCookie = parseCookieInput(params.cookie || "");
+  if (!authenticatedCookie) {
+    console.error("未填写 Cookie，无法获取教父.com 完整分类列表");
+    return [];
+  }
+  const missingCookies = ["app_auth", "browser_verified"]
+    .filter((name) => !hasCookie(authenticatedCookie, name));
+  if (missingCookies.length > 0) {
+    console.error(`Cookie 缺少 ${missingCookies.join(" 和 ")}，请从已登录且已完成安全验证的浏览器重新导出完整 Cookie`);
+    return [];
+  }
+  if (!userAgent) {
+    console.error("未填写浏览器 User-Agent；browser_verified 与浏览器标识绑定，请填写导出 Cookie 时同一浏览器的完整 User-Agent");
+    return [];
   }
 
   const filters = {
@@ -1349,36 +901,11 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
   const filterLog = [filters.year, filters.genre, filters.area].filter(Boolean).join("/") || "无筛选";
   console.log(`Forward 第 ${forwardPage} 页 → 教父.com 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
 
-  let activeCookie = authenticatedCookie;
-  let raw = await fetchGying(gyingType, gyingPage, sort, activeCookie, filters, { userAgent: userAgent });
-  let data = getListData(raw);
-  if (!data && isVerificationExpired(raw)) {
-    try {
-      console.log("浏览器验证已过期，正在同一 Cookie 会话中刷新");
-      for (let refreshAttempt = 0; refreshAttempt < 2 && !data; refreshAttempt += 1) {
-        // A cached browser_verified may have been revoked before its local TTL.
-        // Drop it after a failed retry and recompute the proof once in this call.
-        if (refreshAttempt > 0) {
-          invalidateVerificationCache(authenticatedCookie, userAgent);
-          console.log("缓存的浏览器验证已失效，重新计算验证");
-        }
-        const refreshed = await refreshBrowserVerification(authenticatedCookie, userAgent);
-        if (!refreshed || !refreshed.hasExplicitVerificationCookie) {
-          throw new Error("Forward 未暴露 browser_verified Cookie；请重新导入完整有效 Cookie");
-        }
-        activeCookie = refreshed.cookieString;
-        raw = await fetchGying(gyingType, gyingPage, sort, activeCookie, filters, { userAgent: userAgent });
-        data = getListData(raw);
-        if (data || !isVerificationExpired(raw)) break;
-      }
-    } catch (error) {
-      console.error(`自动刷新浏览器验证失败：${safeErrorMessage(error, credentialSecrets)}`);
-      return [];
-    }
-  }
+  const raw = await fetchGying(gyingType, gyingPage, sort, authenticatedCookie, filters, { userAgent: userAgent });
+  const data = getListData(raw);
   if (!data) {
     if (isVerificationExpired(raw)) {
-      console.error("浏览器验证仍未通过，请确认 app_auth 有效且 User-Agent 与导出 Cookie 的浏览器一致");
+      console.error("浏览器验证已过期或 User-Agent 不匹配；请在同一浏览器重新完成验证并导出包含 app_auth 和 browser_verified 的完整 Cookie");
     } else {
       console.error("分类列表请求失败或响应格式无效，请检查 Cookie 与网络状态");
     }
