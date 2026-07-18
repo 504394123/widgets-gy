@@ -1,21 +1,22 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.0.7",
+  version: "4.1.0",
   requiredVersion: "0.0.1",
-  description: "获取 Gying.si 影视数据，滚动加载更多（需配置 Cookie）",
+  description: "获取 教父.com 影视数据；最近更新无需 Cookie，筛选与深度翻页需配置新站 Cookie",
   author: "Antigravity",
-  site: "https://www.gying.si/",
+  site: "https://www.xn--wcv59z.com/",
+  detailCacheDuration: 3600,
   globalParams: [
     {
       name: "cookie",
-      title: "Cookie",
+      title: "Cookie（可选）",
       type: "input",
-      description: "支持浏览器插件导出的 JSON 格式，或 key=value; key=value 格式",
+      description: "不填可看最近更新；筛选与更多分页需粘贴新站导出的 Cookie",
       placeholders: [
         {
           title: "JSON 格式（推荐）",
-          value: "[{\"name\":\"app_auth\",\"value\":\"xxx\"},{\"name\":\"BT_auth\",\"value\":\"xxx\"},{\"name\":\"BT_cookietime\",\"value\":\"xxx\"},{\"name\":\"PHPSESSID\",\"value\":\"xxx\"}]"
+          value: "[{\"name\":\"app_auth\",\"value\":\"xxx\"},{\"name\":\"browser_verified\",\"value\":\"xxx\"},{\"name\":\"PHPSESSID\",\"value\":\"xxx\"}]"
         }
       ]
     }
@@ -468,18 +469,30 @@ WidgetMetadata = {
   ],
 };
 
-const BASE_URL = "https://www.gying.si";
+const BASE_URL = "https://www.xn--wcv59z.com";
+const IMG_BASE = "https://s.tutu.pm/img";
+const PUBLIC_FEED_PAGES = 5;
 
 /**
  * 将用户输入的 Cookie 转换为 "name=value; name=value" 格式
  */
 function parseCookieInput(input) {
   if (!input) return "";
-  const trimmed = input.trim();
+  const trimmed = String(input).trim();
   if (trimmed.startsWith("[")) {
     try {
       const arr = JSON.parse(trimmed);
-      return arr.map(c => `${c.name}=${c.value}`).join("; ");
+      if (Array.isArray(arr)) {
+        const cookies = new Map();
+        arr.forEach((cookie) => {
+          if (cookie && cookie.name && cookie.value !== undefined) {
+            cookies.set(String(cookie.name), String(cookie.value));
+          }
+        });
+        return Array.from(cookies.entries())
+          .map(([name, value]) => `${name}=${value}`)
+          .join("; ");
+      }
     } catch (e) {
       console.error("Cookie JSON 解析失败，将作为原始字符串使用");
     }
@@ -492,7 +505,7 @@ function parseCookieInput(input) {
  * 例如：七王国的骑士 第一季 -> 七王国的骑士
  */
 function cleanTVTitle(title) {
-  return title
+  return String(title || "")
     .replace(/\s*第[一二三四五六七八九十百千0-9]+季.*$/, "")
     .replace(/\s*Season\s*\d+.*$/i, "")
     .trim();
@@ -505,7 +518,7 @@ function cleanTVTitle(title) {
  * 例：凡人修仙传：星海飞驰篇 → 凡人修仙传
  */
 function cleanAnimeTitle(title) {
-  return title
+  return String(title || "")
     // 去掉“第X季”（中文数字或阿拉伯数字）
     .replace(/\s*第[一二三四五六七八九十百千0-9]+季.*$/, "")
     // 去掉“Season N”
@@ -523,26 +536,127 @@ function cleanAnimeTitle(title) {
  * 获取某一页的 JSON 数据，使用 /res/mv 或 /res/tv API
  * 支持可选筛选参数：genre（类型）、area（地区）、year（年代）
  */
+function buildHeaders(cookieString) {
+  const headers = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": `${BASE_URL}/`,
+    "X-Requested-With": "XMLHttpRequest",
+  };
+  if (cookieString) headers.Cookie = cookieString;
+  return headers;
+}
+
 async function fetchGying(type, page, sort, cookieString, filters = {}) {
-  let url = `${BASE_URL}/res/${type}?sort=${sort}&rrange=${filters.rrange || "6_10"}&srange=${filters.srange || "5000"}&page=${page}`;
-  if (filters.year) url += `&year=${encodeURIComponent(filters.year)}`;
-  if (filters.genre) url += `&genre=${encodeURIComponent(filters.genre)}`;
-  if (filters.area) url += `&region=${encodeURIComponent(filters.area)}`;
-  if (filters.quality) url += `&quality=${encodeURIComponent(filters.quality)}`;
+  const query = {
+    sort: sort || "addtime",
+    rrange: filters.rrange || "6_10",
+    srange: filters.srange || "5000",
+    page: page,
+  };
+  if (filters.year) query.year = filters.year;
+  if (filters.genre) query.genre = filters.genre;
+  if (filters.area) query.region = filters.area;
+  if (filters.quality) query.quality = filters.quality;
+
+  const url = `${BASE_URL}/res/${type}`;
   try {
     const response = await Widget.http.get(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Referer": `${BASE_URL}/`,
-        "Cookie": cookieString,
-        "X-Requested-With": "XMLHttpRequest"
-      }
+      headers: buildHeaders(cookieString),
+      params: query,
     });
     return response.data || null;
   } catch (err) {
     console.error(`请求 ${url} 失败`, err);
+    return null;
+  }
+}
+
+async function fetchPublicFeed(type, index, cookieString) {
+  const url = `${BASE_URL}/res/change/${type}/${index}`;
+  try {
+    const response = await Widget.http.get(url, {
+      headers: buildHeaders(cookieString),
+    });
+    return response.data || null;
+  } catch (err) {
+    console.error(`请求 ${url} 失败`, err);
+    return null;
+  }
+}
+
+function getListData(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const data = payload.inlist && typeof payload.inlist === "object"
+    ? payload.inlist
+    : payload;
+  if (!Array.isArray(data.t) || !Array.isArray(data.i)) return null;
+  return data;
+}
+
+function isVerificationExpired(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  return payload.code === 419
+    || payload.refresh === 1
+    || /浏览器验证/.test(String(payload.msg || ""));
+}
+
+function getSourceRating(data, index) {
+  if (Array.isArray(data.d)) {
+    const rating = Number(data.d[index]);
+    return Number.isFinite(rating) ? rating : 0;
+  }
+
+  if (Array.isArray(data.z)) {
+    const rating = Number(data.z[index]);
+    return Number.isFinite(rating) ? rating / 10 : 0;
+  }
+
+  return 0;
+}
+
+function buildSourceItem(type, mediaType, title, gid, posterPath, rating) {
+  const link = `source:${encodeURIComponent(JSON.stringify({
+    type: type,
+    mediaType: mediaType,
+    title: title,
+    gid: gid,
+    rating: rating,
+  }))}`;
+  return {
+    id: `${BASE_URL}/${type}/${gid}`,
+    type: "url",
+    link: link,
+    mediaType: mediaType,
+    title: title,
+    posterPath: posterPath,
+    rating: rating,
+  };
+}
+
+async function loadDetail(link) {
+  const value = String(link || "");
+  if (!value.startsWith("source:")) return null;
+
+  try {
+    const source = JSON.parse(decodeURIComponent(value.slice(7)));
+    if (!source || !["mv", "tv", "ac"].includes(source.type)) return null;
+    const gid = String(source.gid || "").trim();
+    const title = String(source.title || "").trim();
+    if (!gid || !title) return null;
+
+    return {
+      id: `${BASE_URL}/${source.type}/${gid}`,
+      type: "url",
+      link: value,
+      mediaType: source.mediaType === "movie" ? "movie" : "tv",
+      title: title,
+      posterPath: `${IMG_BASE}/${source.type}/${gid}/256.webp`,
+      rating: Number(source.rating) || 0,
+    };
+  } catch (error) {
+    console.error("来源详情参数解析失败", error);
     return null;
   }
 }
@@ -577,23 +691,19 @@ async function searchTMDB(title, mediaType, year) {
 
 /**
  * 虚拟分页逻辑：
- *   Gying 每页 36 部 → 拆分成 3 个 Forward 页，每页 12 部
- *   Forward page N → Gying page ceil(N/3)，取第 ((N-1)%3)*12 到 ((N-1)%3)*12+12 条
+ *   教父.com 每页 48 部 → 拆分成 4 个 Forward 页，每页 12 部
+ *   Forward page N → 源站 page ceil(N/4)，取第 ((N-1)%4)*12 到 ((N-1)%4)*12+12 条
  *
  * 效果：每次滚动只做 12 个并发 TMDB 查询（原来 36 个），速度快 3 倍；数据无损
  */
 const ITEMS_PER_FORWARD_PAGE = 12;
-const GYING_ITEMS_PER_PAGE = 60;                                               // Gying 每页实际返回 60 部
-const FORWARD_PAGES_PER_GYING = Math.ceil(GYING_ITEMS_PER_PAGE / ITEMS_PER_FORWARD_PAGE); // = 5
+const GYING_ITEMS_PER_PAGE = 48;
+const FORWARD_PAGES_PER_GYING = Math.ceil(GYING_ITEMS_PER_PAGE / ITEMS_PER_FORWARD_PAGE); // = 4
 
-async function fetchRecent(gyingType, mediaType, params) {
+async function fetchRecent(gyingType, mediaType, params = {}) {
+  params = params || {};
   const cookieString = parseCookieInput(params.cookie || "");
-  if (!cookieString) {
-    console.error("未填写 Cookie，无法获取 Gying 数据");
-    return [];
-  }
-
-  const forwardPage = params.page || 1;
+  const forwardPage = Math.max(1, Number(params.page) || 1);
   const sort = params.sort_by || "addtime";
   const filters = {
     year: params.year || "",
@@ -604,75 +714,97 @@ async function fetchRecent(gyingType, mediaType, params) {
     quality: params.quality || "",
   };
 
-  // 计算对应的 Gying 真实页码和切片位置
+  // 有有效 Cookie 时保留完整筛选和深度分页；验证失效则退回公开更新流。
   const gyingPage = Math.ceil(forwardPage / FORWARD_PAGES_PER_GYING);
-  const sliceStart = ((forwardPage - 1) % FORWARD_PAGES_PER_GYING) * ITEMS_PER_FORWARD_PAGE;
-  const sliceEnd = sliceStart + ITEMS_PER_FORWARD_PAGE;
+  let sliceStart = ((forwardPage - 1) % FORWARD_PAGES_PER_GYING) * ITEMS_PER_FORWARD_PAGE;
+  let sliceEnd = sliceStart + ITEMS_PER_FORWARD_PAGE;
+  let data = null;
 
   const filterLog = [filters.year, filters.genre, filters.area].filter(Boolean).join("/") || "无筛选";
-  console.log(`Forward 第 ${forwardPage} 页 → Gying 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
+  if (cookieString) {
+    console.log(`Forward 第 ${forwardPage} 页 → 教父.com 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
+    const raw = await fetchGying(gyingType, gyingPage, sort, cookieString, filters);
+    data = getListData(raw);
+    if (!data) {
+      if (isVerificationExpired(raw)) {
+        console.warn("浏览器验证已过期，改用公开最近更新列表");
+      } else {
+        console.warn("筛选列表不可用，改用公开最近更新列表");
+      }
+    }
+  }
 
-  const raw = await fetchGying(gyingType, gyingPage, sort, cookieString, filters);
+  if (!data) {
+    if (forwardPage > PUBLIC_FEED_PAGES) {
+      console.log("公开最近更新列表仅提供前 5 页；更多分页需要有效 Cookie");
+      return [];
+    }
+    const raw = await fetchPublicFeed(gyingType, forwardPage, cookieString);
+    data = getListData(raw);
+    if (!data) {
+      console.error("公开最近更新列表请求失败");
+      return [];
+    }
+    sliceStart = 0;
+    sliceEnd = ITEMS_PER_FORWARD_PAGE;
+  }
 
-  if (!raw) {
-    console.error("请求失败，请检查 Cookie 是否有效");
+  if (data.t.length === 0) {
+    console.log(`教父.com 第 ${forwardPage} 页无数据`);
     return [];
   }
 
-  const data = raw.inlist || raw;
-  const allTitles = data.t || [];
-  const allIds = data.i || [];
-  const allRatings = data.d || [];
-  const allMeta = data.a || [];  // a[n][0] = 上映年份
-
-  if (allTitles.length === 0) {
-    console.log(`Gying 第 ${gyingPage} 页无数据`);
-    return [];
+  const sourceItems = [];
+  const limit = Math.min(sliceEnd, data.t.length);
+  for (let sourceIndex = sliceStart; sourceIndex < limit; sourceIndex++) {
+    const title = String(data.t[sourceIndex] || "").trim();
+    const gid = String(data.i[sourceIndex] || "").trim();
+    if (!title || !gid) continue;
+    sourceItems.push({
+      title: title,
+      gid: gid,
+      rating: getSourceRating(data, sourceIndex),
+      meta: Array.isArray(data.a) && Array.isArray(data.a[sourceIndex])
+        ? data.a[sourceIndex]
+        : [],
+    });
   }
 
-  // 取当前 Forward 页对应的切片
-  const titles = allTitles.slice(sliceStart, sliceEnd);
-  const ids = allIds.slice(sliceStart, sliceEnd);
-  const ratings = allRatings.slice(sliceStart, sliceEnd);
+  console.log(`取 ${sourceItems.length} 部，并行 TMDB 匹配...`);
 
-  console.log(`取第 ${sliceStart + 1}-${sliceStart + titles.length} 部，并行 TMDB 匹配...`);
-
-  // 并行搜索所有影片（Promise.all 同时发起所有请求，大幅提速）
-  const searchPromises = titles.map((title, n) => {
-    const gid = ids[n] || "";
-    const rating = ratings[n] || 0;
-    const posterPath = gid ? `https://s.tutu.pm/img/mv/${gid}/256.webp` : "";
+  const searchPromises = sourceItems.map((item) => {
+    const posterPath = `${IMG_BASE}/${gyingType}/${item.gid}/256.webp`;
     const searchTitle = gyingType === "ac"
-      ? cleanAnimeTitle(title)
-      : (mediaType === "tv" ? cleanTVTitle(title) : title);
+      ? cleanAnimeTitle(item.title)
+      : (mediaType === "tv" ? cleanTVTitle(item.title) : item.title);
     // 电影才用年份精确匹配；剧集年份是当季播放年非首播年，不传
-    const meta = allMeta.slice(sliceStart, sliceEnd)[n] || [];
-    const releaseYear = (mediaType === "movie" && typeof meta[0] === "number") ? meta[0] : null;
+    const year = Number(item.meta[0]);
+    const releaseYear = mediaType === "movie" && year > 1900 ? year : null;
 
     return searchTMDB(searchTitle, mediaType, releaseYear).then(tmdb => {
       if (tmdb) {
         return {
           id: tmdb.id,
           type: "tmdb",
-          title: tmdb.title || tmdb.name || title,
+          title: tmdb.title || tmdb.name || item.title,
           originalTitle: tmdb.original_title || tmdb.original_name || "",
           description: tmdb.overview || "",
           releaseDate: tmdb.release_date || tmdb.first_air_date || "",
           posterPath: tmdb.poster_path || posterPath,
           backdropPath: tmdb.backdrop_path || "",
-          rating: tmdb.vote_average || rating,
+          rating: Number(tmdb.vote_average) > 0 ? tmdb.vote_average : item.rating,
           mediaType: mediaType,
         };
-      } else {
-        console.log(`"${title}" 未在 TMDB 找到匹配`);
-        return {
-          id: `/${gyingType}/${gid}`,
-          type: "movie",
-          title: title,
-          posterPath: posterPath,
-          rating: rating,
-        };
       }
+      console.log(`"${item.title}" 未在 TMDB 找到匹配，保留来源条目`);
+      return buildSourceItem(
+        gyingType,
+        mediaType,
+        item.title,
+        item.gid,
+        posterPath,
+        item.rating
+      );
     });
   });
 
@@ -681,15 +813,15 @@ async function fetchRecent(gyingType, mediaType, params) {
   return results;
 }
 
-async function recentMovies(params) {
-  return await fetchRecent("mv", "movie", params);
+async function recentMovies(params = {}) {
+  return await fetchRecent("mv", "movie", params || {});
 }
 
-async function recentTV(params) {
-  return await fetchRecent("tv", "tv", params);
+async function recentTV(params = {}) {
+  return await fetchRecent("tv", "tv", params || {});
 }
 
-async function recentAnime(params) {
+async function recentAnime(params = {}) {
   // 动漫大多数是剧集形式，用 tv 类型搜 TMDB
-  return await fetchRecent("ac", "tv", params);
+  return await fetchRecent("ac", "tv", params || {});
 }
