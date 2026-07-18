@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.gying2",
   title: "Gying影视(首页)",
-  version: "3.1.0",
+  version: "3.1.1",
   requiredVersion: "0.0.1",
   description: "获取 教父.com 最新更新的影视数据，通过 TMDB 补全影视信息（Cookie 可选）",
   author: "Antigravity",
@@ -48,7 +48,12 @@ const IMG_BASE = "https://s.tutu.pm/img";
  */
 function parseCookieInput(input) {
   if (!input) return "";
-  const trimmed = String(input).trim();
+  let trimmed = String(input).trim();
+  trimmed = trimmed
+    .replace(/^Cookie\s*:\s*/i, "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s*;\s*/g, "; ")
+    .trim();
   if (trimmed.startsWith("[")) {
     try {
       const arr = JSON.parse(trimmed);
@@ -68,6 +73,29 @@ function parseCookieInput(input) {
     }
   }
   return trimmed;
+}
+
+function responseData(response) {
+  if (!response) return null;
+  let data = Object.prototype.hasOwnProperty.call(response, "data")
+    ? response.data
+    : response;
+  if (typeof data === "string") {
+    try {
+      data = JSON.parse(data);
+    } catch (_error) {}
+  }
+  return data;
+}
+
+function safeErrorMessage(error) {
+  const message = error && typeof error.message === "string"
+    ? error.message
+    : (typeof error === "string" ? error : "未知错误");
+  return message.replace(
+    /((?:cookie|app_auth|browser_verified|browser_pow)\s*[:=]\s*)[^;\s,}]+/gi,
+    "$1<redacted>"
+  );
 }
 
 /**
@@ -102,9 +130,9 @@ async function fetchGying(type, index, cookieString) {
     const response = await Widget.http.get(url, {
       headers: buildHeaders(cookieString),
     });
-    return response.data || null;
+    return responseData(response);
   } catch (err) {
-    console.error(`请求 ${url} 失败`, err);
+    console.error(`请求 ${url} 失败: ${safeErrorMessage(err)}`);
     return null;
   }
 }
@@ -158,7 +186,7 @@ async function loadDetail(link) {
       rating: Number(source.rating) || 0,
     };
   } catch (error) {
-    console.error("来源详情参数解析失败", error);
+    console.error(`来源详情参数解析失败: ${safeErrorMessage(error)}`);
     return null;
   }
 }
@@ -183,7 +211,7 @@ async function searchTMDB(title, mediaType, year) {
       return response.results[0];
     }
   } catch (err) {
-    console.error(`TMDB 搜索"${title}"失败`, err);
+    console.error(`TMDB 搜索"${title}"失败: ${safeErrorMessage(err)}`);
   }
   return null;
 }

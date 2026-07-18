@@ -1,9 +1,9 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.1.1",
+  version: "4.4.1",
   requiredVersion: "0.0.1",
-  description: "获取 教父.com 完整分类影视列表，需配置已通过新站安全验证的 Cookie",
+  description: "获取 教父.com 完整分类影视列表；需要有效 app_auth，验证失效时尝试自动刷新",
   author: "Antigravity",
   site: "https://www.xn--wcv59z.com/",
   detailCacheDuration: 3600,
@@ -12,11 +12,23 @@ WidgetMetadata = {
       name: "cookie",
       title: "Cookie（必填）",
       type: "input",
-      description: "请从已通过安全验证的新站浏览器导出完整 Cookie；验证失效后需重新导出",
+      description: "填写新站当前 Cookie（至少包含 app_auth）；验证失效时尝试 PoW 刷新，宿主不返回 Set-Cookie 时需重新导入",
       placeholders: [
         {
           title: "JSON 格式（推荐）",
           value: "[{\"name\":\"app_auth\",\"value\":\"xxx\"},{\"name\":\"browser_verified\",\"value\":\"xxx\"},{\"name\":\"PHPSESSID\",\"value\":\"xxx\"}]"
+        }
+      ]
+    },
+    {
+      name: "userAgent",
+      title: "User-Agent（可选）",
+      type: "input",
+      description: "browser_verified 会绑定 User-Agent；反复提示过期时，填写导出 Cookie 时同一浏览器的完整 User-Agent",
+      placeholders: [
+        {
+          title: "Chrome 120（内置默认）",
+          value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
       ]
     }
@@ -134,7 +146,7 @@ WidgetMetadata = {
             { title: "3分以上", value: "3_10" },
             { title: "4分以上", value: "4_10" },
             { title: "5分以上", value: "5_10" },
-            { title: "6分以上（默认）", value: "6_10" },
+            { title: "6分以上", value: "6_10" },
             { title: "7分以上", value: "7_10" },
             { title: "8分以上", value: "8_10" },
             { title: "9分以上", value: "9_10" },
@@ -151,7 +163,7 @@ WidgetMetadata = {
             { title: "2000人以上", value: "2000" },
             { title: "3000人以上", value: "3000" },
             { title: "4000人以上", value: "4000" },
-            { title: "5000人以上（默认）", value: "5000" },
+            { title: "5000人以上", value: "5000" },
             { title: "1万人以上", value: "10000" },
             { title: "2万人以上", value: "20000" },
             { title: "5万人以上", value: "50000" },
@@ -273,7 +285,7 @@ WidgetMetadata = {
             { title: "3分以上", value: "3_10" },
             { title: "4分以上", value: "4_10" },
             { title: "5分以上", value: "5_10" },
-            { title: "6分以上（默认）", value: "6_10" },
+            { title: "6分以上", value: "6_10" },
             { title: "7分以上", value: "7_10" },
             { title: "8分以上", value: "8_10" },
             { title: "9分以上", value: "9_10" },
@@ -290,7 +302,7 @@ WidgetMetadata = {
             { title: "2000人以上", value: "2000" },
             { title: "3000人以上", value: "3000" },
             { title: "4000人以上", value: "4000" },
-            { title: "5000人以上（默认）", value: "5000" },
+            { title: "5000人以上", value: "5000" },
             { title: "1万人以上", value: "10000" },
             { title: "2万人以上", value: "20000" },
             { title: "5万人以上", value: "50000" },
@@ -426,7 +438,7 @@ WidgetMetadata = {
             { title: "3分以上", value: "3_10" },
             { title: "4分以上", value: "4_10" },
             { title: "5分以上", value: "5_10" },
-            { title: "6分以上（默认）", value: "6_10" },
+            { title: "6分以上", value: "6_10" },
             { title: "7分以上", value: "7_10" },
             { title: "8分以上", value: "8_10" },
             { title: "9分以上", value: "9_10" },
@@ -443,7 +455,7 @@ WidgetMetadata = {
             { title: "2000人以上", value: "2000" },
             { title: "3000人以上", value: "3000" },
             { title: "4000人以上", value: "4000" },
-            { title: "5000人以上（默认）", value: "5000" },
+            { title: "5000人以上", value: "5000" },
             { title: "1万人以上", value: "10000" },
             { title: "2万人以上", value: "20000" },
             { title: "5万人以上", value: "50000" },
@@ -471,32 +483,307 @@ WidgetMetadata = {
 
 const BASE_URL = "https://www.xn--wcv59z.com";
 const IMG_BASE = "https://s.tutu.pm/img";
+const DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const VERIFICATION_COOKIE_NAMES = new Set(["browser_verified", "browser_pow"]);
+const POW_CACHE_TTL_MS = 20 * 60 * 60 * 1000;
+// The live site currently sends 2048-bit values and t=400000. Keep bounded
+// headroom, but reject pathological challenges before BigInt allocates.
+const POW_MAX_ITERATIONS = 800000;
+const POW_MAX_HEX_LENGTH = 768;
+const POW_BATCH_SIZE = 8192;
+const POW_MIN_DURATION_MS = 3000;
+const verificationCache = new Map();
+const verificationInFlight = new Map();
 
 /**
  * 将用户输入的 Cookie 转换为 "name=value; name=value" 格式
  */
 function parseCookieInput(input) {
   if (!input) return "";
-  const trimmed = String(input).trim();
-  if (trimmed.startsWith("[")) {
+  let value = String(input).trim();
+  const cookies = new Map();
+
+  // Browser extensions commonly export either [{name, value}] or
+  // {cookies:[{name,value}]}; accepting both avoids silently sending JSON as
+  // one malformed cookie value.
+  if (value.startsWith("[") || value.startsWith("{")) {
     try {
-      const arr = JSON.parse(trimmed);
-      if (Array.isArray(arr)) {
-        const cookies = new Map();
-        arr.forEach((cookie) => {
-          if (cookie && cookie.name && cookie.value !== undefined) {
-            cookies.set(String(cookie.name), String(cookie.value));
-          }
-        });
+      const parsed = JSON.parse(value);
+      const entries = Array.isArray(parsed)
+        ? parsed
+        : (parsed && Array.isArray(parsed.cookies)
+          ? parsed.cookies
+          : (parsed && parsed.name ? [parsed] : Object.keys(parsed || {}).map((name) => ({
+            name: name,
+            value: parsed[name],
+          }))));
+      entries.forEach((cookie) => {
+        if (cookie && cookie.name && cookie.value !== undefined && cookie.value !== null) {
+          cookies.set(String(cookie.name).trim(), String(cookie.value));
+        }
+      });
+      if (cookies.size > 0) {
         return Array.from(cookies.entries())
-          .map(([name, value]) => `${name}=${value}`)
+          .map(([name, cookieValue]) => `${name}=${cookieValue}`)
           .join("; ");
       }
-    } catch (e) {
+    } catch (_error) {
       console.error("Cookie JSON 解析失败，将作为原始字符串使用");
     }
   }
-  return trimmed;
+
+  // Accept a copied `Cookie:`/`Set-Cookie:` header, multiline exports, and
+  // Netscape-style tab-separated cookie files. Attributes are ignored.
+  value = value
+    .replace(/^\s*(?:Cookie|Set-Cookie)\s*:\s*/i, "")
+    .replace(/\r/g, "");
+  value.split("\n").forEach((line) => {
+    let text = line.trim();
+    if (!text) return;
+    // Cookie exports may prefix every line, not just the first one.
+    text = text.replace(/^(?:Cookie|Set-Cookie)\s*:\s*/i, "").trim();
+    const fields = text.split("\t");
+    if (fields.length >= 7 && fields[5] && fields[6]) {
+      cookies.set(fields[5].trim(), fields[6].trim());
+      return;
+    }
+    if (text.startsWith("#")) return;
+    text.split(";").forEach((part) => {
+      const separator = part.indexOf("=");
+      if (separator <= 0) return;
+      const name = part.slice(0, separator).trim();
+      const cookieValue = part.slice(separator + 1).trim();
+      if (!name || /^(?:path|domain|expires|max-age|samesite|secure|httponly)$/i.test(name)) return;
+      cookies.set(name, cookieValue);
+    });
+  });
+  return Array.from(cookies.entries())
+    .map(([name, cookieValue]) => `${name}=${cookieValue}`)
+    .join("; ");
+}
+
+function parseCookieMap(cookieString) {
+  const cookies = new Map();
+  String(cookieString || "").split(";").forEach((part) => {
+    const separator = part.indexOf("=");
+    if (separator <= 0) return;
+    const name = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    if (!name) return;
+    cookies.set(name.toLowerCase(), { name: name, value: value });
+  });
+  return cookies;
+}
+
+function serializeCookieMap(cookies) {
+  return Array.from(cookies.values())
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+    .join("; ");
+}
+
+function withoutVerificationCookies(cookieString) {
+  const cookies = parseCookieMap(cookieString);
+  VERIFICATION_COOKIE_NAMES.forEach((name) => cookies.delete(name));
+  return serializeCookieMap(cookies);
+}
+
+function hasCookie(cookieString, name) {
+  return parseCookieMap(cookieString).has(String(name || "").toLowerCase());
+}
+
+function splitSetCookieHeader(value) {
+  if (Array.isArray(value)) {
+    return value.reduce((all, item) => all.concat(splitSetCookieHeader(item)), []);
+  }
+  if (value && typeof value === "object") {
+    if (value.value !== undefined) return splitSetCookieHeader(value.value);
+    if (value.values !== undefined) return splitSetCookieHeader(value.values);
+  }
+  if (value === null || value === undefined) return [];
+  const text = String(value).trim();
+  if (!text) return [];
+  // Headers.get() may combine multiple Set-Cookie values. Expires dates contain
+  // commas too, so split only when the next token looks like another cookie.
+  return text.split(/,(?=\s*[^;,=\s]+\s*=)/g).map((item) => item.trim()).filter(Boolean);
+}
+
+function getHeaderValue(headers, name) {
+  if (!headers) return null;
+  if (typeof headers === "string") {
+    try {
+      return getHeaderValue(JSON.parse(headers), name);
+    } catch (_error) {
+      const wanted = String(name || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const values = [];
+      const pattern = new RegExp(`^\\s*${wanted}\\s*:\\s*(.*)$`, "i");
+      String(headers).split(/\r?\n/).forEach((line) => {
+        const match = line.match(pattern);
+        if (match) values.push(match[1]);
+      });
+      if (values.length === 1) return values[0];
+      if (values.length > 1) return values;
+      return null;
+    }
+  }
+  const wanted = String(name || "").toLowerCase();
+
+  if (typeof headers.get === "function") {
+    try {
+      const value = headers.get(name) || headers.get(wanted);
+      if (value !== null && value !== undefined) return value;
+    } catch (_error) {}
+  }
+
+  if (typeof headers.forEach === "function") {
+    const values = [];
+    try {
+      headers.forEach((value, key) => {
+        if (String(key).toLowerCase() === wanted) values.push(value);
+      });
+    } catch (_error) {}
+    if (values.length > 0) return values;
+  }
+
+  if (typeof headers.entries === "function") {
+    const values = [];
+    try {
+      for (const entry of headers.entries()) {
+        if (Array.isArray(entry) && String(entry[0]).toLowerCase() === wanted) {
+          values.push(entry[1]);
+        }
+      }
+    } catch (_error) {}
+    if (values.length > 0) return values;
+  }
+
+  if (Array.isArray(headers)) {
+    const values = [];
+    headers.forEach((entry) => {
+      if (typeof entry === "string") {
+        const separator = entry.indexOf(":");
+        if (separator > 0 && entry.slice(0, separator).trim().toLowerCase() === wanted) {
+          values.push(entry.slice(separator + 1).trim());
+        }
+      } else if (Array.isArray(entry) && String(entry[0]).toLowerCase() === wanted) {
+        values.push(entry[1]);
+      } else if (entry && typeof entry === "object") {
+        const key = entry.name !== undefined ? entry.name : entry.key;
+        if (key !== undefined && String(key).toLowerCase() === wanted) {
+          values.push(entry.value !== undefined ? entry.value : entry.val);
+        }
+      }
+    });
+    if (values.length > 0) return values;
+  }
+
+  if (typeof headers === "object") {
+    const key = Object.keys(headers).find((candidate) => candidate.toLowerCase() === wanted);
+    if (key) return headers[key];
+  }
+  return null;
+}
+
+function cookieRecordToLine(record) {
+  if (!record || typeof record !== "object") return null;
+  const name = record.name !== undefined ? record.name : record.key;
+  const value = record.value !== undefined ? record.value : record.val;
+  if (!name || /^set-cookie$/i.test(String(name)) || value === undefined || value === null) {
+    return null;
+  }
+  let line = `${String(name).trim()}=${String(value)}`;
+  if (record.expires) line += `; Expires=${record.expires}`;
+  if (record.maxAge !== undefined) line += `; Max-Age=${record.maxAge}`;
+  return line;
+}
+
+function getSetCookieLines(response) {
+  const values = [];
+  const seen = new Set();
+  const add = (line) => {
+    if (!line || seen.has(line)) return;
+    seen.add(line);
+    values.push(line);
+  };
+  [
+    response && response.headers,
+    response && response.header,
+    response && response.responseHeaders,
+    response && response.meta && response.meta.headers,
+    response && response.meta && response.meta.responseHeaders,
+  ].forEach((headers) => {
+    const value = getHeaderValue(headers, "set-cookie");
+    splitSetCookieHeader(value).forEach(add);
+  });
+
+  // Some Forward builds expose parsed cookies separately from response
+  // headers, either as [{name, value}] or as a name -> value map.
+  [
+    response && response.cookies,
+    response && response.cookie,
+    response && response.meta && response.meta.cookies,
+  ].forEach((cookies) => {
+    if (Array.isArray(cookies)) {
+      cookies.forEach((cookie) => add(cookieRecordToLine(cookie)));
+    } else if (cookies && typeof cookies === "object") {
+      const direct = cookieRecordToLine(cookies);
+      if (direct) add(direct);
+      else Object.keys(cookies).forEach((name) => {
+        if (cookies[name] !== undefined && cookies[name] !== null) {
+          add(`${name}=${cookies[name]}`);
+        }
+      });
+    } else if (typeof cookies === "string") {
+      splitSetCookieHeader(cookies).forEach(add);
+    }
+  });
+  return values;
+}
+
+function mergeCookieStrings(cookieString, setCookieLines) {
+  const cookies = parseCookieMap(cookieString);
+  splitSetCookieHeader(setCookieLines).forEach((line) => {
+    const parts = String(line).split(";");
+    const pair = parts.shift().trim();
+    const separator = pair.indexOf("=");
+    if (separator <= 0) return;
+
+    const name = pair.slice(0, separator).trim();
+    const value = pair.slice(separator + 1).trim();
+    const attributes = parts.join(";");
+    const maxAge = attributes.match(/(?:^|;)\s*max-age\s*=\s*(-?\d+)/i);
+    const expires = attributes.match(/(?:^|;)\s*expires\s*=\s*([^;]+)/i);
+    const expiresAt = expires ? Date.parse(expires[1].trim()) : NaN;
+    const deleted = (maxAge && Number(maxAge[1]) <= 0)
+      || (Number.isFinite(expiresAt) && expiresAt <= Date.now())
+      || value === "";
+    const key = name.toLowerCase();
+    if (deleted) cookies.delete(key);
+    else cookies.set(key, { name: name, value: value });
+  });
+  return serializeCookieMap(cookies);
+}
+
+function responseData(response) {
+  if (!response) return null;
+  let data = Object.prototype.hasOwnProperty.call(response, "data")
+    ? response.data
+    : response;
+  if (typeof data === "string") {
+    try {
+      data = JSON.parse(data);
+    } catch (_error) {}
+  }
+  return data;
+}
+
+function safeErrorMessage(error) {
+  const message = error && typeof error.message === "string"
+    ? error.message
+    : (typeof error === "string" ? error : "未知错误");
+  return message.replace(
+    /((?:cookie|app_auth|browser_verified|browser_pow)\s*[:=]\s*)[^;\s,}]+/gi,
+    "$1<redacted>"
+  );
 }
 
 /**
@@ -535,23 +822,31 @@ function cleanAnimeTitle(title) {
  * 获取某一页的 JSON 数据，使用 /res/mv 或 /res/tv API
  * 支持可选筛选参数：genre（类型）、area（地区）、year（年代）
  */
-function buildHeaders(cookieString) {
+function normalizeUserAgent(value) {
+  return String(value || "").replace(/[\r\n]+/g, " ").trim() || DEFAULT_USER_AGENT;
+}
+
+function buildHeaders(cookieString, extraHeaders = {}, userAgent = "") {
   const headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": normalizeUserAgent(userAgent),
     "Accept": "application/json, text/javascript, */*; q=0.01",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": `${BASE_URL}/`,
     "X-Requested-With": "XMLHttpRequest",
   };
+  Object.keys(extraHeaders || {}).forEach((name) => {
+    if (extraHeaders[name] === null || extraHeaders[name] === undefined) delete headers[name];
+    else headers[name] = extraHeaders[name];
+  });
   if (cookieString) headers.Cookie = cookieString;
   return headers;
 }
 
-async function fetchGying(type, page, sort, cookieString, filters = {}) {
+async function fetchGying(type, page, sort, cookieString, filters = {}, options = {}) {
   const query = {
     sort: sort || "addtime",
-    rrange: filters.rrange || "6_10",
-    srange: filters.srange || "5000",
+    rrange: filters.rrange || "0_10",
+    srange: filters.srange || "0",
     page: page,
   };
   if (filters.year) query.year = filters.year;
@@ -562,30 +857,210 @@ async function fetchGying(type, page, sort, cookieString, filters = {}) {
   const url = `${BASE_URL}/res/${type}`;
   try {
     const response = await Widget.http.get(url, {
-      headers: buildHeaders(cookieString),
+      headers: buildHeaders(cookieString, options.headers, options.userAgent),
       params: query,
     });
-    return response.data || null;
+    // Keep the response envelope so HTTP status fields remain available to the
+    // verification-expiry detector. getListData unwraps `.data` below.
+    return response;
   } catch (err) {
-    console.error(`请求 ${url} 失败`, err);
-    return null;
+    console.error(`请求 ${url} 失败: ${safeErrorMessage(err)}`);
+    // Keep the original error so callers can inspect HTTP status fields such
+    // as error.response.status instead of mistaking every failure for an
+    // ordinary empty response.
+    return err || { message: "网络请求失败" };
   }
 }
 
+function normalizeHex(value, fieldName) {
+  const text = String(value || "").trim().replace(/^0x/i, "");
+  if (!text || !/^[0-9a-f]+$/i.test(text)) {
+    throw new Error(`浏览器验证挑战 ${fieldName} 无效`);
+  }
+  if (text.length > POW_MAX_HEX_LENGTH) {
+    throw new Error(`浏览器验证挑战 ${fieldName} 过大`);
+  }
+  return text;
+}
+
+function yieldExecution() {
+  if (typeof setTimeout === "function") {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return Promise.resolve();
+}
+
+async function waitForMinimumDuration(startedAt, durationMs) {
+  const deadline = startedAt + durationMs;
+  if (Date.now() >= deadline) return;
+  if (typeof setTimeout === "function") {
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now())));
+    return;
+  }
+
+  // There is no reliable non-blocking timer fallback in older JSCore hosts.
+  // Finish immediately there rather than busy-waiting and freezing Forward;
+  // current Forward builds expose setTimeout and take the timed path above.
+}
+
+async function solveProofOfWork(challenge) {
+  if (typeof BigInt !== "function") {
+    throw new Error("当前 Forward 运行环境不支持 BigInt，无法完成浏览器验证");
+  }
+
+  const modulusHex = normalizeHex(challenge && challenge.N, "N");
+  const seedHex = normalizeHex(challenge && challenge.x, "x");
+  const iterations = Number(challenge && challenge.t);
+  if (!Number.isSafeInteger(iterations) || iterations < 0 || iterations > POW_MAX_ITERATIONS) {
+    throw new Error("浏览器验证挑战计算次数超出支持范围");
+  }
+
+  const modulus = BigInt(`0x${modulusHex}`);
+  if (modulus <= BigInt(1)) throw new Error("浏览器验证挑战模数无效");
+
+  let result = BigInt(`0x${seedHex}`) % modulus;
+  const startedAt = Date.now();
+  for (let index = 0; index < iterations; index += 1) {
+    result = (result * result) % modulus;
+    if ((index + 1) % POW_BATCH_SIZE === 0) await yieldExecution();
+  }
+  await waitForMinimumDuration(startedAt, POW_MIN_DURATION_MS);
+  return result.toString(16);
+}
+
+function verificationCacheKey(cookieString, userAgent) {
+  const cookieKey = withoutVerificationCookies(cookieString) || "__anonymous__";
+  return `${cookieKey}\n${normalizeUserAgent(userAgent)}`;
+}
+
+function invalidateVerificationCache(cookieString, userAgent) {
+  verificationCache.delete(verificationCacheKey(cookieString, userAgent));
+}
+
+async function performBrowserVerification(cookieString, userAgent) {
+  const baseCookie = withoutVerificationCookies(cookieString);
+  const pageHeaders = buildHeaders(baseCookie, {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "X-Requested-With": null,
+  }, userAgent);
+  const pageResponse = await Widget.http.get(`${BASE_URL}/mv`, {
+    headers: pageHeaders,
+  });
+  let sessionCookie = mergeCookieStrings(baseCookie, getSetCookieLines(pageResponse));
+
+  const challengeResponse = await Widget.http.get(`${BASE_URL}/res/pow`, {
+    headers: buildHeaders(sessionCookie, {
+      "Accept": "application/json, text/plain, */*",
+      "X-Requested-With": null,
+    }, userAgent),
+  });
+  sessionCookie = mergeCookieStrings(sessionCookie, getSetCookieLines(challengeResponse));
+  if (!hasCookie(sessionCookie, "browser_pow")) {
+    throw new Error("Forward 未暴露 browser_pow Cookie；请重新导入完整有效 Cookie，或升级到支持响应 Cookie 的版本");
+  }
+  const challenge = responseData(challengeResponse);
+  if (!challenge || typeof challenge !== "object") {
+    throw new Error("浏览器验证挑战响应为空");
+  }
+
+  const proof = await solveProofOfWork(challenge);
+  const verifyResponse = await Widget.http.post(
+    `${BASE_URL}/res/pow`,
+    `y=${encodeURIComponent(proof)}`,
+    {
+      headers: buildHeaders(sessionCookie, {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Requested-With": null,
+      }, userAgent),
+    }
+  );
+  const verification = responseData(verifyResponse);
+  if (!verification || verification.success !== true) {
+    throw new Error("浏览器验证未通过");
+  }
+
+  sessionCookie = mergeCookieStrings(sessionCookie, getSetCookieLines(verifyResponse));
+  const hasExplicitVerificationCookie = hasCookie(sessionCookie, "browser_verified");
+  if (!hasExplicitVerificationCookie) {
+    throw new Error("Forward 未暴露 browser_verified Cookie；请重新导入完整有效 Cookie，或升级到支持响应 Cookie 的版本");
+  }
+  return {
+    cookieString: sessionCookie,
+    hasExplicitVerificationCookie: hasExplicitVerificationCookie,
+  };
+}
+
+async function refreshBrowserVerification(cookieString, userAgent) {
+  const key = verificationCacheKey(cookieString, userAgent);
+  const cached = verificationCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+  if (verificationInFlight.has(key)) return await verificationInFlight.get(key);
+
+  const promise = performBrowserVerification(cookieString, userAgent)
+    .then((refreshed) => {
+      if (refreshed.hasExplicitVerificationCookie) {
+        verificationCache.set(key, {
+          cookieString: refreshed.cookieString,
+          hasExplicitVerificationCookie: true,
+          expiresAt: Date.now() + POW_CACHE_TTL_MS,
+        });
+      }
+      return refreshed;
+    })
+    .finally(() => verificationInFlight.delete(key));
+  verificationInFlight.set(key, promise);
+  return await promise;
+}
+
 function getListData(payload) {
-  if (!payload || typeof payload !== "object") return null;
-  const data = payload.inlist && typeof payload.inlist === "object"
-    ? payload.inlist
-    : payload;
+  const body = responseData(payload);
+  if (!body || typeof body !== "object") return null;
+  const data = body.inlist && typeof body.inlist === "object"
+    ? body.inlist
+    : body;
   if (!Array.isArray(data.t) || !Array.isArray(data.i)) return null;
   return data;
 }
 
 function isVerificationExpired(payload) {
-  if (!payload || typeof payload !== "object") return false;
-  return payload.code === 419
-    || payload.refresh === 1
-    || /浏览器验证/.test(String(payload.msg || ""));
+  const seen = new Set();
+  let expired = false;
+  const textPattern = /(?:浏览器验证|browser verification|verification expired|verify(?:ing)? (?:expired|required|failed))/i;
+  const inspect = (value, depth) => {
+    if (expired || value === null || value === undefined || depth > 5) return;
+    if (typeof value === "string") {
+      if (textPattern.test(value)) {
+        expired = true;
+        return;
+      }
+      const text = value.trim();
+      if ((text.startsWith("{") || text.startsWith("[")) && text.length < 200000) {
+        try {
+          inspect(JSON.parse(text), depth + 1);
+        } catch (_error) {}
+      }
+      return;
+    }
+    if (typeof value !== "object" && typeof value !== "function") return;
+    if (seen.has(value)) return;
+    seen.add(value);
+
+    const statusValues = [value.status, value.statusCode, value.httpStatus];
+    if (statusValues.some((status) => Number(status) === 419)) {
+      expired = true;
+      return;
+    }
+    if (Number(value.code) === 419 || Number(value.refresh) === 1) {
+      expired = true;
+      return;
+    }
+
+    [value.message, value.msg, value.error, value.cause, value.response, value.data,
+      value.body, value.result, value.payload].forEach((child) => inspect(child, depth + 1));
+  };
+  inspect(payload, 0);
+  return expired;
 }
 
 function getSourceRating(data, index) {
@@ -642,7 +1117,7 @@ async function loadDetail(link) {
       rating: Number(source.rating) || 0,
     };
   } catch (error) {
-    console.error("来源详情参数解析失败", error);
+    console.error(`来源详情参数解析失败: ${safeErrorMessage(error)}`);
     return null;
   }
 }
@@ -670,7 +1145,7 @@ async function searchTMDB(title, mediaType, year) {
       return response.results[0];
     }
   } catch (err) {
-    console.error(`TMDB 搜索"${title}"(年份:${year})失败`, err);
+    console.error(`TMDB 搜索"${title}"(年份:${year})失败: ${safeErrorMessage(err)}`);
   }
   return null;
 }
@@ -696,12 +1171,13 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
 
   const forwardPage = Math.max(1, Number(params.page) || 1);
   const sort = params.sort_by || "addtime";
+  const userAgent = normalizeUserAgent(params.userAgent || "");
   const filters = {
     year: params.year || "",
     genre: params.genre || "",
     area: params.area || "",
-    rrange: params.rrange || "6_10",
-    srange: params.srange || "5000",
+    rrange: params.rrange || "0_10",
+    srange: params.srange || "0",
     quality: params.quality || "",
   };
 
@@ -712,11 +1188,36 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
   const filterLog = [filters.year, filters.genre, filters.area].filter(Boolean).join("/") || "无筛选";
   console.log(`Forward 第 ${forwardPage} 页 → 教父.com 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
 
-  const raw = await fetchGying(gyingType, gyingPage, sort, cookieString, filters);
-  const data = getListData(raw);
+  let activeCookie = cookieString;
+  let raw = await fetchGying(gyingType, gyingPage, sort, activeCookie, filters, { userAgent: userAgent });
+  let data = getListData(raw);
+  if (!data && isVerificationExpired(raw)) {
+    try {
+      console.log("浏览器验证已过期，正在同一 Cookie 会话中刷新");
+      for (let refreshAttempt = 0; refreshAttempt < 2 && !data; refreshAttempt += 1) {
+        // A cached browser_verified may have been revoked before its local TTL.
+        // Drop it after a failed retry and recompute the proof once in this call.
+        if (refreshAttempt > 0) {
+          invalidateVerificationCache(cookieString, userAgent);
+          console.log("缓存的浏览器验证已失效，重新计算验证");
+        }
+        const refreshed = await refreshBrowserVerification(cookieString, userAgent);
+        if (!refreshed || !refreshed.hasExplicitVerificationCookie) {
+          throw new Error("Forward 未暴露 browser_verified Cookie；请重新导入完整有效 Cookie");
+        }
+        activeCookie = refreshed.cookieString;
+        raw = await fetchGying(gyingType, gyingPage, sort, activeCookie, filters, { userAgent: userAgent });
+        data = getListData(raw);
+        if (data || !isVerificationExpired(raw)) break;
+      }
+    } catch (error) {
+      console.error(`自动刷新浏览器验证失败：${error && error.message ? error.message : error}`);
+      return [];
+    }
+  }
   if (!data) {
     if (isVerificationExpired(raw)) {
-      console.error("浏览器验证已过期，请刷新教父.com 并重新导出完整 Cookie");
+      console.error("浏览器验证仍未通过，请确认 app_auth 有效且 User-Agent 与导出 Cookie 的浏览器一致");
     } else {
       console.error("分类列表请求失败或响应格式无效，请检查 Cookie 与网络状态");
     }

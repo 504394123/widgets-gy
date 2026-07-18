@@ -9,6 +9,8 @@ function loadWidget(filename, handlers = {}) {
   const httpCalls = [];
   const tmdbCalls = [];
   const context = {
+    setTimeout,
+    clearTimeout,
     console: {
       log() {},
       error() {},
@@ -17,9 +19,14 @@ function loadWidget(filename, handlers = {}) {
     Widget: {
       http: {
         get: async (url, options = {}) => {
-          httpCalls.push({ url, options });
+          httpCalls.push({ method: "GET", url, options });
           if (!handlers.httpGet) throw new Error(`Unexpected HTTP GET: ${url}`);
           return handlers.httpGet(url, options);
+        },
+        post: async (url, body, options = {}) => {
+          httpCalls.push({ method: "POST", url, body, options });
+          if (!handlers.httpPost) throw new Error(`Unexpected HTTP POST: ${url}`);
+          return handlers.httpPost(url, body, options);
         },
       },
       tmdb: {
@@ -62,7 +69,7 @@ function changePayload(type, rows) {
 
 async function testMainRequiresCookieAndNeverUsesPublicFeed() {
   const widget = loadWidget("gying.js", {
-    httpGet: async (url) => {
+    httpGet: async (url, options) => {
       throw new Error(`gying.js must not use a public fallback: ${url}`);
     },
   });
@@ -133,13 +140,394 @@ async function testMainKeepsFilteredPagingWithCurrentCookie() {
   assert.equal(items[0].posterPath, "https://s.tutu.pm/img/tv/tv48/256.webp");
 }
 
-async function testMainDoesNotFallbackWhenVerificationExpired() {
+async function testMainRefreshesVerificationAndKeepsFilters() {
+  let categoryCalls = 0;
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url, options) => {
+      if (url === `${NEW_BASE_URL}/res/mv`) {
+        categoryCalls += 1;
+        assert.equal(options.headers["User-Agent"], "TestBrowser/1.0");
+        assert.equal(options.params.page, 2);
+        assert.equal(options.params.sort, "addtime");
+        assert.equal(options.params.genre, "科幻");
+        assert.equal(options.params.region, "美国");
+        assert.equal(options.params.year, "2025");
+        assert.equal(options.params.quality, "4K");
+        assert.equal(options.params.rrange, "7_10");
+        assert.equal(options.params.srange, "10000");
+        if (categoryCalls === 1) {
+          return { data: { code: 419, refresh: 1, msg: "浏览器验证已过期，请刷新页面" } };
+        }
+        assert.match(options.headers.Cookie, /app_auth=auth/);
+        assert.match(options.headers.Cookie, /browser_verified=verified/);
+        assert.doesNotMatch(options.headers.Cookie, /browser_verified=stale/);
+        const rows = Array.from({ length: 48 }, (_, index) => ({
+          title: `电影 ${48 + index}`,
+          id: `mv${48 + index}`,
+        }));
+        return {
+          data: {
+            page: { pages: 50 },
+            inlist: {
+              t: rows.map((row) => row.title),
+              i: rows.map((row) => row.id),
+              d: rows.map(() => 8.2),
+              a: rows.map(() => [2025]),
+            },
+          },
+        };
+      }
+      if (url === `${NEW_BASE_URL}/mv`) {
+        assert.equal(options.headers["User-Agent"], "TestBrowser/1.0");
+        return {
+          data: "<html>challenge</html>",
+          headers: [
+            "HTTP/2 200",
+            "Set-Cookie: browser_pow=pow; Path=/; HttpOnly",
+            "",
+          ].join(String.fromCharCode(13, 10)),
+        };
+      }
+      if (url === `${NEW_BASE_URL}/res/pow`) {
+        assert.equal(options.headers["User-Agent"], "TestBrowser/1.0");
+        assert.equal(options.headers.Cookie, "app_auth=auth; browser_pow=pow");
+        return {
+          data: { N: "f", x: "2", t: 3 },
+          responseHeaders: [["Set-Cookie", "browser_pow=pow; Path=/; HttpOnly"]],
+        };
+      }
+      throw new Error(`Unexpected HTTP GET: ${url}`);
+    },
+    httpPost: async (url, body, options) => {
+      assert.equal(url, `${NEW_BASE_URL}/res/pow`);
+      assert.equal(body, "y=1");
+      assert.equal(options.headers["Content-Type"], "application/x-www-form-urlencoded");
+      assert.equal(options.headers["User-Agent"], "TestBrowser/1.0");
+      assert.equal(options.headers.Cookie, "app_auth=auth; browser_pow=pow");
+      return {
+        data: { success: true },
+        meta: {
+          headers: [
+            {
+              name: "Set-Cookie",
+              value: "browser_verified=verified; Expires=Wed, 21 Oct 2030 07:28:00 GMT; Path=/; HttpOnly",
+            },
+            {
+              name: "Set-Cookie",
+              value: "browser_pow=gone; Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; Path=/",
+            },
+          ],
+        },
+      };
+    },
+  });
+
+  const items = await widget.call(
+    'recentMovies({ page: 5, genre: "科幻", area: "美国", year: "2025", quality: "4K", rrange: "7_10", srange: "10000", userAgent: "TestBrowser/1.0", cookie: "app_auth=auth; browser_verified=stale" })'
+  );
+  assert.equal(items.length, 12);
+  assert.equal(items[0].title, "电影 48");
+  assert.equal(items[0].type, "url");
+  assert.equal(categoryCalls, 2);
+  assert.deepEqual(widget.httpCalls.map((call) => call.url), [
+    `${NEW_BASE_URL}/res/mv`,
+    `${NEW_BASE_URL}/mv`,
+    `${NEW_BASE_URL}/res/pow`,
+    `${NEW_BASE_URL}/res/pow`,
+    `${NEW_BASE_URL}/res/mv`,
+  ]);
+}
+
+async function testMainForcesRefreshWhenCachedVerificationExpires() {
+  let categoryCalls = 0;
+  let refreshRound = 0;
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url, options) => {
+      if (url === `${NEW_BASE_URL}/res/mv`) {
+        categoryCalls += 1;
+        if (categoryCalls === 1 || categoryCalls === 3 || categoryCalls === 4) {
+          return { data: { code: 419, refresh: 1, msg: "浏览器验证已过期" } };
+        }
+
+        const expectedVerification = categoryCalls === 2 ? "one" : "two";
+        assert.match(options.headers.Cookie, new RegExp(`browser_verified=${expectedVerification}`));
+        const rows = Array.from({ length: 48 }, (_, index) => ({
+          title: `缓存验证 ${index}`,
+          id: `cached${index}`,
+        }));
+        return {
+          data: {
+            inlist: {
+              t: rows.map((row) => row.title),
+              i: rows.map((row) => row.id),
+              d: rows.map(() => 7.5),
+              a: rows.map(() => [2026]),
+            },
+          },
+        };
+      }
+      if (url === `${NEW_BASE_URL}/mv`) {
+        refreshRound += 1;
+        return {
+          data: "<html>challenge</html>",
+          headers: `Set-Cookie: browser_pow=pow${refreshRound}; Path=/; HttpOnly`,
+        };
+      }
+      if (url === `${NEW_BASE_URL}/res/pow`) {
+        assert.equal(options.headers.Cookie, `app_auth=auth; browser_pow=pow${refreshRound}`);
+        return { data: { N: "f", x: "2", t: 3 } };
+      }
+      throw new Error(`Unexpected HTTP GET: ${url}`);
+    },
+    httpPost: async (url, body, options) => {
+      assert.equal(url, `${NEW_BASE_URL}/res/pow`);
+      assert.equal(body, "y=1");
+      assert.equal(options.headers.Cookie, `app_auth=auth; browser_pow=pow${refreshRound}`);
+      return {
+        data: { success: true },
+        headers: `Set-Cookie: browser_verified=${refreshRound === 1 ? "one" : "two"}; Path=/; HttpOnly`,
+      };
+    },
+  });
+  // Keep this regression test fast; the production path still enforces 3 s.
+  widget.context.setTimeout = (callback) => {
+    callback();
+    return 0;
+  };
+
+  const expression = 'recentMovies({ page: 1, userAgent: "TestBrowser/1.0", cookie: "app_auth=auth; browser_verified=stale" })';
+  const firstItems = await widget.call(expression);
+  assert.equal(firstItems.length, 12);
+  const secondItems = await widget.call(expression);
+  assert.equal(secondItems.length, 12);
+  assert.equal(refreshRound, 2);
+  assert.equal(categoryCalls, 5);
+}
+
+async function testMainAcceptsCookieHeaderAndJsonBody() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url, options) => {
+      assert.equal(url, `${NEW_BASE_URL}/res/mv`);
+      assert.equal(options.headers.Cookie, "app_auth=header; browser_verified=proof");
+      assert.equal(options.params.rrange, "0_10");
+      assert.equal(options.params.srange, "0");
+      const rows = Array.from({ length: 48 }, (_, index) => ({
+        title: `Header 电影 ${index}`,
+        id: `header${index}`,
+      }));
+      return {
+        data: JSON.stringify({
+          inlist: {
+            t: rows.map((row) => row.title),
+            i: rows.map((row) => row.id),
+            d: rows.map(() => 7.1),
+            a: rows.map(() => [2024]),
+          },
+        }),
+      };
+    },
+  });
+
+  const items = await widget.call(
+    'recentMovies({ page: 1, cookie: "Cookie: app_auth=header;\\n browser_verified=proof" })'
+  );
+  assert.equal(items.length, 12);
+  assert.equal(items[0].title, "Header 电影 0");
+  assert.equal(widget.httpCalls.some((call) => call.url.includes("/res/change/")), false);
+}
+
+async function testMainParsesCommonCookieExports() {
+  const widget = loadWidget("gying.js");
+  widget.context.__netscapeCookies = [
+    "# Netscape HTTP Cookie File",
+    "#HttpOnly_.xn--wcv59z.com\tTRUE\t/\tTRUE\t2147483647\tapp_auth\tauth",
+    ".xn--wcv59z.com\tTRUE\t/\tTRUE\t2147483647\tbrowser_verified\tproof",
+  ].join("\n");
+  assert.equal(
+    widget.call("parseCookieInput(__netscapeCookies)"),
+    "app_auth=auth; browser_verified=proof"
+  );
+
+  widget.context.__multilineCookies = [
+    "Set-Cookie: app_auth=auth; Path=/; HttpOnly",
+    "Set-Cookie: browser_verified=proof; Path=/; HttpOnly",
+  ].join("\n");
+  assert.equal(
+    widget.call("parseCookieInput(__multilineCookies)"),
+    "app_auth=auth; browser_verified=proof"
+  );
+
+  widget.context.__cookieResponse = {
+    headers: ["HTTP/2 200", "Set-Cookie: browser_pow=pow; Path=/; HttpOnly"],
+    meta: { cookies: { browser_verified: "proof" } },
+  };
+  assert.equal(
+    widget.call('mergeCookieStrings("app_auth=auth", getSetCookieLines(__cookieResponse))'),
+    "app_auth=auth; browser_pow=pow; browser_verified=proof"
+  );
+}
+
+async function testMainRejectsHiddenSetCookieHeaders() {
+  let categoryCalls = 0;
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url, options) => {
+      if (url === `${NEW_BASE_URL}/res/mv`) {
+        categoryCalls += 1;
+        if (categoryCalls === 1) {
+          return { data: { code: 419, refresh: 1, msg: "浏览器验证已过期" } };
+        }
+        throw new Error("分类请求不应在隐藏 Set-Cookie 后重试");
+      }
+      if (url === `${NEW_BASE_URL}/mv`) {
+        assert.equal(options.headers.Cookie, "app_auth=jar");
+        return { data: "<html>challenge</html>" };
+      }
+      if (url === `${NEW_BASE_URL}/res/pow`) {
+        assert.equal(options.headers.Cookie, "app_auth=jar");
+        return { data: JSON.stringify({ N: "f", x: "2", t: 3 }) };
+      }
+      throw new Error(`Unexpected HTTP GET: ${url}`);
+    },
+    httpPost: async (url, body, options) => {
+      assert.equal(url, `${NEW_BASE_URL}/res/pow`);
+      assert.equal(body, "y=1");
+      assert.equal(options.headers.Cookie, "app_auth=jar");
+      return { data: { success: true } };
+    },
+  });
+
+  const items = await widget.call(
+    'recentMovies({ page: 1, cookie: "app_auth=jar; browser_verified=stale" })'
+  );
+  assert.equal(items.length, 0);
+  assert.equal(categoryCalls, 1);
+  assert.deepEqual(widget.httpCalls.map((call) => call.url), [
+    `${NEW_BASE_URL}/res/mv`,
+    `${NEW_BASE_URL}/mv`,
+    `${NEW_BASE_URL}/res/pow`,
+  ]);
+  assert.equal(widget.httpCalls.some((call) => call.url.includes("/res/change/")), false);
+}
+
+async function testMainRejectsHiddenVerificationCookie() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url, options) => {
+      if (url === `${NEW_BASE_URL}/res/mv`) {
+        return { data: { code: 419, refresh: 1, msg: "浏览器验证已过期" } };
+      }
+      if (url === `${NEW_BASE_URL}/mv`) {
+        return {
+          data: "<html>challenge</html>",
+          headers: "Set-Cookie: browser_pow=pow; Path=/; HttpOnly",
+        };
+      }
+      if (url === `${NEW_BASE_URL}/res/pow`) {
+        assert.equal(options.headers.Cookie, "app_auth=x; browser_pow=pow");
+        return { data: { N: "f", x: "2", t: 0 } };
+      }
+      throw new Error(`Unexpected HTTP GET: ${url}`);
+    },
+    httpPost: async () => ({ data: { success: true } }),
+  });
+
+  const items = await widget.call(
+    'recentMovies({ page: 1, cookie: "app_auth=x; browser_verified=stale" })'
+  );
+  assert.equal(items.length, 0);
+  assert.equal(widget.httpCalls.some((call) => call.method === "POST"), true);
+  assert.equal(widget.httpCalls.some((call) => call.url.includes("/res/change/")), false);
+}
+
+async function testMainDetectsNestedHttpStatus() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url) => {
+      if (url === `${NEW_BASE_URL}/res/mv`) {
+        return { status: 419, data: { message: "verification expired" } };
+      }
+      if (url === `${NEW_BASE_URL}/mv`) return { data: "<html>challenge</html>" };
+      if (url === `${NEW_BASE_URL}/res/pow`) {
+        return { status: 419, data: { refresh: 1 } };
+      }
+      throw new Error(`Unexpected HTTP GET: ${url}`);
+    },
+  });
+
+  const items = await widget.call('recentMovies({ page: 1, cookie: "app_auth=x" })');
+  assert.equal(items.length, 0);
+  assert.deepEqual(widget.httpCalls.map((call) => call.url), [
+    `${NEW_BASE_URL}/res/mv`,
+    `${NEW_BASE_URL}/mv`,
+    `${NEW_BASE_URL}/res/pow`,
+  ]);
+}
+
+async function testMainDetectsThrownHttpStatus() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url) => {
+      if (url === `${NEW_BASE_URL}/res/mv`) {
+        const error = new Error("request rejected");
+        error.response = { status: 419, data: { msg: "browser verification expired" } };
+        throw error;
+      }
+      throw new Error(`Unexpected HTTP GET: ${url}`);
+    },
+  });
+
+  const items = await widget.call('recentMovies({ page: 1, cookie: "app_auth=x" })');
+  assert.equal(items.length, 0);
+  assert.deepEqual(widget.httpCalls.map((call) => call.url), [
+    `${NEW_BASE_URL}/res/mv`,
+    `${NEW_BASE_URL}/mv`,
+  ]);
+}
+
+async function testPowWithoutTimersDoesNotBusyWait() {
+  const widget = loadWidget("gying.js");
+  widget.context.setTimeout = undefined;
+  const startedAt = Date.now();
+  const proof = await widget.call('solveProofOfWork({ N: "f", x: "2", t: 3 })');
+  assert.equal(proof, "1");
+  assert.ok(Date.now() - startedAt < 500);
+}
+
+async function testMainRejectsOversizedPowChallenge() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url, options) => {
+      if (url === `${NEW_BASE_URL}/res/mv`) {
+        return { data: { code: 419, refresh: 1, msg: "浏览器验证已过期" } };
+      }
+      if (url === `${NEW_BASE_URL}/mv`) {
+        return {
+          data: "<html>challenge</html>",
+          headers: "Set-Cookie: browser_pow=pow; Path=/; HttpOnly",
+        };
+      }
+      if (url === `${NEW_BASE_URL}/res/pow`) {
+        assert.equal(options.headers.Cookie, "app_auth=x; browser_pow=pow");
+        return { data: { N: "f".repeat(1025), x: "2", t: 1 } };
+      }
+      throw new Error(`Unexpected HTTP GET: ${url}`);
+    },
+  });
+
+  const items = await widget.call('recentMovies({ page: 1, cookie: "app_auth=x" })');
+  assert.equal(items.length, 0);
+  assert.deepEqual(widget.httpCalls.map((call) => call.url), [
+    `${NEW_BASE_URL}/res/mv`,
+    `${NEW_BASE_URL}/mv`,
+    `${NEW_BASE_URL}/res/pow`,
+  ]);
+  assert.equal(widget.httpCalls.some((call) => call.url.includes("/res/change/")), false);
+}
+
+async function testMainReturnsEmptyWhenVerificationRefreshFails() {
   const widget = loadWidget("gying.js", {
     httpGet: async (url) => {
       if (url === `${NEW_BASE_URL}/res/mv`) {
         return { data: { code: 419, refresh: 1, msg: "浏览器验证已过期，请刷新页面" } };
       }
-      throw new Error(`gying.js must not use a public fallback: ${url}`);
+      if (url === `${NEW_BASE_URL}/mv`) return { data: "<html>challenge</html>" };
+      throw new Error(`Unexpected HTTP GET: ${url}`);
     },
   });
 
@@ -147,10 +535,12 @@ async function testMainDoesNotFallbackWhenVerificationExpired() {
     'recentMovies({ page: 2, genre: "科幻", cookie: "app_auth=x" })'
   );
   assert.equal(items.length, 0);
-  assert.deepEqual(
-    widget.httpCalls.map((call) => call.url),
-    [`${NEW_BASE_URL}/res/mv`]
-  );
+  assert.deepEqual(widget.httpCalls.map((call) => call.url), [
+    `${NEW_BASE_URL}/res/mv`,
+    `${NEW_BASE_URL}/mv`,
+    `${NEW_BASE_URL}/res/pow`,
+  ]);
+  assert.equal(widget.httpCalls.some((call) => call.url.includes("/res/change/")), false);
 }
 
 async function testMainDoesNotFallbackWhenCategoryRequestFails() {
@@ -186,7 +576,8 @@ async function testHomeFeedIsPublicAndContinuesPastDuplicates() {
         4: [],
       };
       assert.equal(url, `${NEW_BASE_URL}/res/change/tv/${index}`);
-      return { data: changePayload("tv", batches[index] || []) };
+      const payload = changePayload("tv", batches[index] || []);
+      return { data: index === 1 ? JSON.stringify(payload) : payload };
     },
   });
 
@@ -247,7 +638,17 @@ async function testLivePublicFeeds() {
 const tests = [
   testMainRequiresCookieAndNeverUsesPublicFeed,
   testMainKeepsFilteredPagingWithCurrentCookie,
-  testMainDoesNotFallbackWhenVerificationExpired,
+  testMainRefreshesVerificationAndKeepsFilters,
+  testMainForcesRefreshWhenCachedVerificationExpires,
+  testMainAcceptsCookieHeaderAndJsonBody,
+  testMainParsesCommonCookieExports,
+  testMainRejectsHiddenSetCookieHeaders,
+  testMainRejectsHiddenVerificationCookie,
+  testMainDetectsNestedHttpStatus,
+  testMainDetectsThrownHttpStatus,
+  testPowWithoutTimersDoesNotBusyWait,
+  testMainRejectsOversizedPowChallenge,
+  testMainReturnsEmptyWhenVerificationRefreshFails,
   testMainDoesNotFallbackWhenCategoryRequestFails,
   testHomeFeedIsPublicAndContinuesPastDuplicates,
 ];
