@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const NEW_BASE_URL = "https://www.xn--wcv59z.com";
+const LOCAL_BASE_URL = "http://192.168.3.50:21111";
 
 function loadWidget(filename, handlers = {}) {
   const httpCalls = [];
@@ -59,121 +59,141 @@ function loadWidget(filename, handlers = {}) {
   };
 }
 
-function changePayload(type, rows) {
+function browsePayload(type, rows, currentPage = 1, maxPage = 50) {
   return {
-    ty: type,
-    t: rows.map((row) => row.title),
-    i: rows.map((row) => row.id),
-    d: rows.map((row) => row.rating || 0),
-    a: rows.map((row) => [row.year || 0]),
+    data: {
+      items: rows.map((row) => ({
+        href: `/${type}/${row.id}`,
+        title: row.title,
+        poster: row.poster || `/api/poster?url=${encodeURIComponent(`https://images.example/${type}/${row.id}.webp`)}`,
+        quality: row.quality || "",
+        rating: row.rating === undefined ? "" : String(row.rating),
+        tag: row.year === undefined ? "" : String(row.year),
+        type,
+      })),
+      currentPage,
+      maxPage,
+    },
   };
 }
 
-async function testMainRequiresCompleteCookieAndNeverUsesPublicFeed() {
+async function testMainUsesLocalServiceWithoutAuthentication() {
   const widget = loadWidget("gying.js", {
     httpGet: async (url, options) => {
-      throw new Error(`gying.js must not use a public fallback: ${url}`);
-    },
-  });
-
-  assert.equal(widget.metadata.site, `${NEW_BASE_URL}/`);
-  const items = await widget.call('recentMovies({ page: 1, genre: "科幻" })');
-
-  assert.equal(items.length, 0);
-  assert.equal(widget.httpCalls.length, 0);
-  assert.equal(widget.tmdbCalls.length, 0);
-}
-
-async function testMainDeclaresOnlyCookieAuthenticationInputs() {
-  const widget = loadWidget("gying.js");
-  const params = widget.metadata.globalParams;
-
-  assert.equal(widget.metadata.version, "4.6.1");
-  assert.deepEqual(Array.from(params, (param) => String(param.name)), ["cookie", "userAgent"]);
-  assert.equal(params[0].type, "input");
-  assert.equal(params[1].type, "input");
-  assert.match(params[0].description, /app_auth/);
-  assert.match(params[0].description, /browser_verified/);
-  assert.match(params[0].description, /刷新.*安全验证.*重新导出/);
-  assert.match(params[1].title, /必填/);
-  assert.equal(Object.hasOwn(params[1], "value"), false);
-  assert.doesNotMatch(JSON.stringify(widget.metadata), /账号密码/);
-}
-
-async function testMainRejectsIncompleteCookieWithoutNetwork() {
-  const widget = loadWidget("gying.js", {
-    httpGet: async (url) => {
-      throw new Error(`Incomplete Cookie must not use GET: ${url}`);
-    },
-    httpPost: async (url) => {
-      throw new Error(`Incomplete Cookie must not use POST: ${url}`);
-    },
-  });
-  widget.context.__appAuthOnly = { cookie: "app_auth=auth" };
-  widget.context.__verificationOnly = { cookie: "browser_verified=proof" };
-  widget.context.__emptyValues = { cookie: "app_auth=; browser_verified=" };
-  widget.context.__missingUserAgent = { cookie: "app_auth=auth; browser_verified=proof" };
-
-  assert.equal((await widget.call("recentMovies(__appAuthOnly)")).length, 0);
-  assert.equal((await widget.call("recentMovies(__verificationOnly)")).length, 0);
-  assert.equal((await widget.call("recentMovies(__emptyValues)")).length, 0);
-  assert.equal((await widget.call("recentMovies(__missingUserAgent)")).length, 0);
-  assert.equal(widget.httpCalls.length, 0);
-  assert.match(widget.logs.error.join("\n"), /app_auth/);
-  assert.match(widget.logs.error.join("\n"), /browser_verified/);
-  assert.match(widget.logs.error.join("\n"), /User-Agent/);
-}
-
-async function testMainKeepsFilteredPagingWithCurrentCookie() {
-  const widget = loadWidget("gying.js", {
-    httpGet: async (url, options) => {
-      assert.equal(url, `${NEW_BASE_URL}/res/tv`);
-      assert.equal(options.params.page, 2);
+      assert.equal(url, `${LOCAL_BASE_URL}/api/browse`);
+      assert.equal(options.params.type, "mv");
+      assert.equal(options.params.page, 1);
       assert.equal(options.params.sort, "addtime");
-      assert.equal(options.params.genre, "科幻");
-      assert.equal(options.params.region, "美国");
-      assert.equal(options.params.year, "2025");
-      assert.equal(options.params.quality, "4K");
-      assert.equal(options.params.rrange, "7_10");
-      assert.equal(options.params.srange, "10000");
-      assert.equal(options.headers.Referer, `${NEW_BASE_URL}/`);
-      assert.equal(options.headers.Cookie, "app_auth=new; browser_verified=proof");
-      assert.equal(options.headers["User-Agent"], "TestBrowser/1.0");
-      const offset = (options.params.page - 1) * 48;
-      const rows = Array.from({ length: 48 }, (_, index) => ({
-        title: `剧集 ${offset + index}`,
-        id: `tv${offset + index}`,
-      }));
+      assert.equal(options.params.rrange, "0_10");
+      assert.equal(options.params.srange, "0");
+      assert.equal(Object.hasOwn(options, "headers"), false);
       return {
-        data: {
-          page: { pages: 50 },
-          inlist: {
-            t: rows.map((row) => row.title),
-            i: rows.map((row) => row.id),
-            d: rows.map(() => 8.2),
-            z: rows.map(() => 12),
-            a: rows.map(() => [2026]),
-          },
-        },
+        data: browsePayload("mv", Array.from({ length: 48 }, (_, index) => ({
+          title: `本地电影 ${index}`,
+          id: `mv${index}`,
+          rating: 7.1,
+          year: 2026,
+        }))),
       };
     },
   });
 
-  const cookie = JSON.stringify([
-    { name: "app_auth", value: "old" },
-    { name: "app_auth", value: "new" },
-    { name: "browser_verified", value: "proof" },
-  ]);
+  assert.equal(widget.metadata.site, `${LOCAL_BASE_URL}/`);
+  assert.equal(widget.metadata.version, "5.0.0");
+  assert.equal(Object.hasOwn(widget.metadata, "globalParams"), false);
+  assert.doesNotMatch(JSON.stringify(widget.metadata), /Cookie|User-Agent|app_auth|browser_verified/);
+  const items = await widget.call('recentMovies({ page: 1, genre: "科幻" })');
+
+  assert.equal(items.length, 12);
+  assert.equal(items[0].title, "本地电影 0");
+  assert.equal(items[0].type, "url");
+  assert.equal(items[0].mediaType, "movie");
+  assert.equal(
+    items[0].posterPath,
+    `${LOCAL_BASE_URL}/api/poster?url=${encodeURIComponent("https://images.example/mv/mv0.webp")}`
+  );
+  assert.equal(widget.httpCalls.length, 1);
+  assert.equal(widget.tmdbCalls.length, 12);
+}
+
+async function testMainMetadataMatchesLocalFilterGroups() {
+  const widget = loadWidget("gying.js");
+  const expectedParamNames = [
+    "page", "sort_by", "genre", "area", "lang", "year", "quality", "state",
+    "rrange", "srange", "trange", "timetype", "imdb", "playable",
+  ];
+
+  for (const module of widget.metadata.modules) {
+    assert.deepEqual(Array.from(module.params, (param) => param.name), expectedParamNames);
+    const params = Object.fromEntries(Array.from(module.params, (param) => [param.name, param]));
+    assert.deepEqual(
+      Array.from(params.quality.enumOptions, (option) => option.value),
+      ["", "720P", "1080P", "4K", "3D", "BD", "HDR", "DV", "原盘"]
+    );
+    assert.deepEqual(
+      Array.from(params.state.enumOptions, (option) => option.value),
+      ["", "预告", "抢先版"]
+    );
+    assert.ok(params.area.enumOptions.some((option) => option.value === "澳大利亚"));
+    assert.ok(params.lang.enumOptions.some((option) => option.value === "无对白"));
+    assert.ok(params.year.enumOptions.some((option) => option.value === "3"));
+    assert.ok(params.year.enumOptions.some((option) => option.value === "1"));
+  }
+
+  const anime = widget.metadata.modules.find((module) => module.id === "recentAnime");
+  const animeGenre = anime.params.find((param) => param.name === "genre");
+  assert.ok(animeGenre.enumOptions.some((option) => option.value === "萌系"));
+  assert.equal(animeGenre.enumOptions.some((option) => option.value === "萝系"), false);
+}
+
+async function testMainKeepsFilteredPagingThroughLocalProxy() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url, options) => {
+      assert.equal(url, `${LOCAL_BASE_URL}/api/browse`);
+      assert.equal(options.params.type, "tv");
+      assert.equal(options.params.page, 2);
+      assert.equal(options.params.sort, "score");
+      assert.equal(options.params.genre, "科幻");
+      assert.equal(options.params.region, "美国");
+      assert.equal(options.params.year, "2025");
+      assert.equal(options.params.quality, "4K");
+      assert.equal(options.params.lang, "英语");
+      assert.equal(options.params.state, "抢先版");
+      assert.equal(options.params.rrange, "7_10");
+      assert.equal(options.params.srange, "10000");
+      assert.equal(options.params.trange, "30");
+      assert.equal(options.params.timetype, "uptime");
+      assert.equal(options.params.imdb, "1");
+      assert.equal(options.params.playable, "1");
+      assert.equal(Object.hasOwn(options, "headers"), false);
+      const offset = (options.params.page - 1) * 48;
+      const rows = Array.from({ length: 48 }, (_, index) => ({
+        title: `剧集 ${offset + index}`,
+        id: `tv${offset + index}`,
+        rating: 8.2,
+        year: 2026,
+      }));
+      return {
+        data: browsePayload("tv", rows, options.params.page),
+      };
+    },
+  });
+
   const items = await widget.call(`recentTV({
     page: 5,
-    cookie: ${JSON.stringify(cookie)},
+    sort_by: "score",
     genre: "科幻",
     area: "美国",
     year: "2025",
     quality: "4K",
+    lang: "英语",
+    state: "抢先版",
     rrange: "7_10",
     srange: "10000",
-    userAgent: "TestBrowser/1.0"
+    trange: "30",
+    timetype: "uptime",
+    imdb: "1",
+    playable: "1"
   })`);
 
   assert.equal(items.length, 12);
@@ -181,202 +201,204 @@ async function testMainKeepsFilteredPagingWithCurrentCookie() {
   assert.equal(items[0].rating, 8.2);
   assert.equal(items[0].type, "url");
   assert.equal(items[0].mediaType, "tv");
-  assert.equal(items[0].posterPath, "https://s.tutu.pm/img/tv/tv48/256.webp");
+  assert.match(items[0].posterPath, /^http:\/\/192\.168\.3\.50:21111\/api\/poster\?/);
+  assert.equal(Object.hasOwn(widget.tmdbCalls[0].options.params, "first_air_date_year"), false);
 }
 
-async function testMainAcceptsCookieHeaderAndJsonBody() {
+async function testMainAcceptsJsonStringAndMatchesMovieYear() {
   const widget = loadWidget("gying.js", {
     httpGet: async (url, options) => {
-      assert.equal(url, `${NEW_BASE_URL}/res/mv`);
-      assert.equal(options.headers.Cookie, "app_auth=header; browser_verified=proof");
-      assert.equal(options.headers["User-Agent"], "HeaderBrowser/1.0");
-      assert.equal(options.params.rrange, "0_10");
-      assert.equal(options.params.srange, "0");
-      const rows = Array.from({ length: 48 }, (_, index) => ({
-        title: `Header 电影 ${index}`,
-        id: `header${index}`,
-      }));
+      assert.equal(url, `${LOCAL_BASE_URL}/api/browse`);
+      assert.equal(options.params.type, "mv");
       return {
-        data: JSON.stringify({
-          inlist: {
-            t: rows.map((row) => row.title),
-            i: rows.map((row) => row.id),
-            d: rows.map(() => 7.1),
-            a: rows.map(() => [2024]),
-          },
-        }),
+        data: JSON.stringify(browsePayload("mv", [{
+          title: "年份电影",
+          id: "year-movie",
+          rating: 7.1,
+          year: 2024,
+        }])),
+      };
+    },
+    tmdbGet: async (api, options) => {
+      assert.equal(api, "search/movie");
+      assert.equal(options.params.query, "年份电影");
+      assert.equal(options.params.year, 2024);
+      return {
+        results: [{
+          id: 123,
+          title: "TMDB 年份电影",
+          poster_path: "/tmdb.webp",
+          vote_average: 8.8,
+        }],
       };
     },
   });
 
-  const items = await widget.call(
-    'recentMovies({ page: 1, cookie: "Cookie: app_auth=header;\\n browser_verified=proof", userAgent: "HeaderBrowser/1.0" })'
-  );
+  const items = await widget.call("recentMovies({ page: 1 })");
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, 123);
+  assert.equal(items[0].type, "tmdb");
+  assert.equal(items[0].mediaType, "movie");
+  assert.equal(items[0].title, "TMDB 年份电影");
+}
+
+async function testMainSlicesOneLocalPageAcrossFourForwardPages() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url, options) => {
+      assert.equal(url, `${LOCAL_BASE_URL}/api/browse`);
+      assert.equal(options.params.type, "ac");
+      assert.equal(options.params.page, 1);
+      return {
+        data: browsePayload("ac", Array.from({ length: 48 }, (_, index) => ({
+          title: `动漫 ${index}`,
+          id: `ac${index}`,
+        }))),
+      };
+    },
+  });
+
+  const items = await widget.call("recentAnime({ page: 2 })");
   assert.equal(items.length, 12);
-  assert.equal(items[0].title, "Header 电影 0");
-  assert.equal(widget.httpCalls.some((call) => call.url.includes("/res/change/")), false);
+  assert.equal(items[0].title, "动漫 12");
+  assert.equal(items[11].title, "动漫 23");
 }
 
-async function testMainParsesCommonCookieExports() {
-  const widget = loadWidget("gying.js");
-  widget.context.__netscapeCookies = [
-    "# Netscape HTTP Cookie File",
-    ".example.com\tTRUE\t/\tTRUE\t2147483647\tunrelated_session\tmust-not-send",
-    "#HttpOnly_.xn--wcv59z.com\tTRUE\t/\tTRUE\t2147483647\tapp_auth\tauth",
-    ".xn--wcv59z.com\tTRUE\t/\tTRUE\t2147483647\tbrowser_verified\tproof",
-  ].join("\n");
-  assert.equal(
-    widget.call("parseCookieInput(__netscapeCookies)"),
-    "app_auth=auth; browser_verified=proof"
-  );
-
-  widget.context.__multilineCookies = [
-    "Set-Cookie: unrelated_session=must-not-send; Domain=.example.com; Path=/",
-    "Set-Cookie: app_auth=auth; Domain=.xn--wcv59z.com; Path=/; HttpOnly",
-    "Set-Cookie: browser_verified=proof; Domain=www.xn--wcv59z.com; Path=/; HttpOnly",
-  ].join("\n");
-  assert.equal(
-    widget.call("parseCookieInput(__multilineCookies)"),
-    "app_auth=auth; browser_verified=proof"
-  );
-
-  widget.context.__jsonCookies = JSON.stringify({
-    cookies: [
-      { domain: ".example.com", name: "unrelated_session", value: "must-not-send" },
-      { domain: ".xn--wcv59z.com", name: "app_auth", value: "json-auth" },
-      { domain: "www.xn--wcv59z.com", name: "browser_verified", value: "json-proof" },
-    ],
-  });
-  assert.equal(
-    widget.call("parseCookieInput(__jsonCookies)"),
-    "app_auth=json-auth; browser_verified=json-proof"
-  );
-}
-
-async function testMainDoesNotRetryVerificationWithoutResponseCookies() {
-  const widget = loadWidget("gying.js", {
-    httpGet: async (url) => {
-      assert.equal(url, `${NEW_BASE_URL}/res/mv`);
-      // This is all Forward exposes in the real failure case: no response
-      // headers and therefore no browser_pow/browser_verified to reuse.
-      return { data: { code: 419, refresh: 1, msg: "浏览器验证已过期" } };
-    },
-    httpPost: async (url) => {
-      throw new Error(`419 must not POST: ${url}`);
-    },
-  });
-
-  const items = await widget.call(
-    'recentMovies({ page: 1, cookie: "app_auth=auth; browser_verified=stale", userAgent: "TestBrowser/1.0" })'
-  );
-  assert.equal(items.length, 0);
-  assert.deepEqual(widget.httpCalls.map((call) => call.url), [
-    `${NEW_BASE_URL}/res/mv`,
-  ]);
-  assert.equal(widget.httpCalls.some((call) => call.method === "POST"), false);
-  const errors = widget.logs.error.join("\n");
-  assert.match(errors, /Cookie 已成功识别并发送/);
-  assert.match(errors, /419/);
-  assert.match(errors, /刷新.*安全验证/);
-  assert.match(errors, /重新导出/);
-}
-
-async function testMainDoesNotFallbackWhenCategoryRequestFails() {
-  const widget = loadWidget("gying.js", {
-    httpGet: async (url) => {
-      assert.equal(url, `${NEW_BASE_URL}/res/ac`);
-      throw new Error("network unavailable");
-    },
-  });
-
-  const items = await widget.call(
-    'recentAnime({ page: 1, genre: "科幻", cookie: "app_auth=x; browser_verified=proof", userAgent: "TestBrowser/1.0" })'
-  );
-  assert.equal(items.length, 0);
-  assert.deepEqual(
-    widget.httpCalls.map((call) => call.url),
-    [`${NEW_BASE_URL}/res/ac`]
-  );
-}
-
-async function testMainUsesCompleteCookieForEveryCategory() {
+async function testMainUsesCorrectGyingTypeForEveryCategory() {
   const cases = [
-    { handler: "recentMovies", path: "mv" },
-    { handler: "recentTV", path: "tv" },
-    { handler: "recentAnime", path: "ac" },
+    { handler: "recentMovies", type: "mv" },
+    { handler: "recentTV", type: "tv" },
+    { handler: "recentAnime", type: "ac" },
   ];
 
   for (const testCase of cases) {
     const widget = loadWidget("gying.js", {
       httpGet: async (url, options) => {
-        assert.equal(url, `${NEW_BASE_URL}/res/${testCase.path}`);
-        assert.equal(options.headers.Cookie, "app_auth=auth; browser_verified=proof");
-        assert.equal(options.headers["User-Agent"], "CategoryBrowser/1.0");
-        return { data: { inlist: { t: [], i: [] } } };
+        assert.equal(url, `${LOCAL_BASE_URL}/api/browse`);
+        assert.equal(options.params.type, testCase.type);
+        return { data: browsePayload(testCase.type, []) };
       },
     });
-    widget.context.__categoryParams = {
-      cookie: "app_auth=auth; browser_verified=proof",
-      userAgent: "CategoryBrowser/1.0",
-    };
 
-    assert.equal((await widget.call(`${testCase.handler}(__categoryParams)`)).length, 0);
-    assert.deepEqual(widget.httpCalls.map((call) => call.url), [
-      `${NEW_BASE_URL}/res/${testCase.path}`,
-    ]);
+    assert.equal((await widget.call(`${testCase.handler}({ page: 1 })`)).length, 0);
+    assert.equal(widget.httpCalls.length, 1);
+    assert.equal(widget.httpCalls.some((call) => call.url.includes("/api/mukaku/")), false);
     assert.equal(widget.httpCalls.some((call) => call.url.includes("/res/change/")), false);
   }
 }
 
-async function testMainRedactsCookieFromRequestErrors() {
-  const cookie = "app_auth=sensitive-auth; browser_verified=sensitive-proof";
+async function testMainKeepsLocalPosterInSourceDetail() {
   const widget = loadWidget("gying.js", {
     httpGet: async () => {
-      throw new Error(`request failed {"Cookie":"${cookie}"}`);
+      return {
+        data: browsePayload("mv", [{
+          title: "本地详情电影",
+          id: "local-detail",
+          poster: "/api/poster?url=encoded-source",
+          rating: 6.6,
+          year: 2025,
+        }]),
+      };
     },
   });
-  widget.context.__redactionParams = { cookie, userAgent: "TestBrowser/1.0" };
 
-  assert.equal((await widget.call("recentMovies(__redactionParams)")).length, 0);
-  const errors = widget.logs.error.join("\n");
-  assert.doesNotMatch(errors, /sensitive-auth|sensitive-proof/);
-  assert.match(errors, /<redacted>/);
+  const items = await widget.call("recentMovies({ page: 1 })");
+  assert.equal(items.length, 1);
+  assert.equal(items[0].posterPath, `${LOCAL_BASE_URL}/api/poster?url=encoded-source`);
+  widget.context.__sourceLink = items[0].link;
+  const detail = await widget.call("loadDetail(__sourceLink)");
+  assert.equal(detail.id, `${LOCAL_BASE_URL}/mv/local-detail`);
+  assert.equal(detail.title, "本地详情电影");
+  assert.equal(detail.posterPath, items[0].posterPath);
+  assert.equal(detail.rating, 6.6);
 }
 
-async function testHomeFeedIsPublicAndContinuesPastDuplicates() {
-  const widget = loadWidget("gying_home.js", {
-    httpGet: async (url, options) => {
-      assert.equal(options.headers.Referer, `${NEW_BASE_URL}/`);
-      const index = Number(url.split("/").pop());
-      const batches = {
-        1: [
-          { title: "剧集甲", id: "a", rating: 8.2, year: 2026 },
-          { title: "剧集乙", id: "b", rating: 7.8, year: 2025 },
-        ],
-        2: [{ title: "剧集乙", id: "b", rating: 7.8, year: 2025 }],
-        3: [{ title: "剧集丙", id: "c", rating: 7.4, year: 2024 }],
-        4: [],
-      };
-      assert.equal(url, `${NEW_BASE_URL}/res/change/tv/${index}`);
-      const payload = changePayload("tv", batches[index] || []);
-      return { data: index === 1 ? JSON.stringify(payload) : payload };
+async function testMainNormalizesAbsoluteSourceAndProtocolRelativePoster() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async () => ({
+      data: {
+        data: {
+          items: [{
+            href: `${LOCAL_BASE_URL}/tv/absolute-id?from=proxy`,
+            title: "完整地址剧集",
+            poster: "//images.example/poster.webp",
+            rating: "7.7",
+            tag: "2025",
+            type: "tv",
+          }],
+          currentPage: 1,
+          maxPage: 1,
+        },
+      },
+    }),
+  });
+
+  const items = await widget.call("recentTV({ page: 1 })");
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, `${LOCAL_BASE_URL}/tv/absolute-id`);
+  assert.equal(items[0].posterPath, "http://images.example/poster.webp");
+}
+
+async function testMainDoesNotFallbackWhenLocalRequestFails() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url) => {
+      assert.equal(url, `${LOCAL_BASE_URL}/api/browse`);
+      throw new Error("network unavailable");
     },
   });
 
-  assert.equal(widget.metadata.site, `${NEW_BASE_URL}/`);
-  const items = await widget.call("recentTV()");
+  assert.equal((await widget.call('recentAnime({ page: 1, genre: "科幻" })')).length, 0);
+  assert.deepEqual(widget.httpCalls.map((call) => call.url), [`${LOCAL_BASE_URL}/api/browse`]);
+  assert.equal(widget.httpCalls.some((call) => call.url.includes("/res/")), false);
+  const errors = widget.logs.error.join("\n");
+  assert.match(errors, /本地 Gying 服务|192\.168\.3\.50:21111/);
+  assert.doesNotMatch(errors, /Cookie|browser_verified|419/);
+}
 
-  assert.equal(items.length, 3);
-  assert.equal(items[2].title, "剧集丙");
-  assert.equal(items[2].type, "url");
-  assert.equal(items[2].mediaType, "tv");
-  assert.match(items[2].link, /^source:/);
-  assert.equal(items[2].posterPath, "https://s.tutu.pm/img/tv/c/256.webp");
-  widget.context.__sourceLink = items[2].link;
-  const detail = await widget.call("loadDetail(__sourceLink)");
-  assert.equal(detail.title, "剧集丙");
-  assert.equal(detail.mediaType, "tv");
-  assert.equal(widget.httpCalls.some((call) => call.options.headers.Cookie), false);
+async function testHomeUsesLocalServiceForEverySection() {
+  const rowsByType = {
+    mv: [{ title: "首页电影", id: "home-movie", rating: 8.2, year: 2026 }],
+    tv: [{ title: "首页剧集", id: "home-tv", rating: 7.8, year: 2025 }],
+    ac: [{ title: "首页动漫", id: "home-anime", rating: 7.4, year: 2024 }],
+  };
+  const sections = Object.entries(rowsByType).map(([type, rows]) => ({
+    type,
+    title: type,
+    items: browsePayload(type, rows).data.items,
+  }));
+  const cases = [
+    { handler: "recentMovies", type: "mv", title: "首页电影", mediaType: "movie" },
+    { handler: "recentTV", type: "tv", title: "首页剧集", mediaType: "tv" },
+    { handler: "recentAnime", type: "ac", title: "首页动漫", mediaType: "tv" },
+  ];
+
+  for (const testCase of cases) {
+    const widget = loadWidget("gying_home.js", {
+      httpGet: async (url, options) => {
+        assert.equal(url, `${LOCAL_BASE_URL}/api/home`);
+        assert.equal(Object.hasOwn(options, "headers"), false);
+        return { data: JSON.stringify({ data: sections }) };
+      },
+    });
+
+    assert.equal(widget.metadata.site, `${LOCAL_BASE_URL}/`);
+    assert.equal(widget.metadata.version, "4.0.0");
+    assert.equal(Object.hasOwn(widget.metadata, "globalParams"), false);
+    assert.deepEqual(
+      Array.from(widget.metadata.modules, (module) => module.id),
+      ["recentMovies", "recentTV", "recentAnime"]
+    );
+    assert.doesNotMatch(JSON.stringify(widget.metadata), /Cookie|User-Agent|app_auth|browser_verified/);
+
+    const items = await widget.call(`${testCase.handler}()`);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].title, testCase.title);
+    assert.equal(items[0].type, "url");
+    assert.equal(items[0].mediaType, testCase.mediaType);
+    assert.equal(items[0].id, `${LOCAL_BASE_URL}/${testCase.type}/${rowsByType[testCase.type][0].id}`);
+    assert.match(items[0].posterPath, /^http:\/\/192\.168\.3\.50:21111\/api\/poster\?/);
+    assert.equal(widget.httpCalls.length, 1);
+    assert.equal(widget.httpCalls.some((call) => call.url.includes("/res/")), false);
+  }
 }
 
 async function liveHttpGet(url, options = {}) {
@@ -398,39 +420,49 @@ async function liveHttpGet(url, options = {}) {
   };
 }
 
-async function testLivePublicFeeds() {
+async function testLiveLocalService() {
   const handlers = {
     httpGet: liveHttpGet,
     tmdbGet: async () => ({ results: [] }),
   };
   const main = loadWidget("gying.js", handlers);
-  const invalidCookieItems = await main.call(
-    'recentMovies({ page: 1, genre: "科幻", cookie: "app_auth=invalid; browser_verified=invalid", userAgent: "GyingWidgetLiveTest/1.0" })'
-  );
-  assert.equal(invalidCookieItems.length, 0);
-  assert.ok(main.httpCalls.some((call) => call.url === `${NEW_BASE_URL}/res/mv`));
-  assert.equal(main.httpCalls.some((call) => call.url.includes("/res/change/")), false);
+  const movies = await main.call('recentMovies({ page: 1, genre: "科幻", area: "美国" })');
+  const tv = await main.call('recentTV({ page: 1, genre: "科幻", area: "美国" })');
+  const anime = await main.call("recentAnime({ page: 1 })");
+
+  assert.ok(movies.length > 0 && movies.length <= 12);
+  assert.ok(tv.length > 0 && tv.length <= 12);
+  assert.ok(anime.length > 0 && anime.length <= 12);
+  assert.ok(main.httpCalls.every((call) => call.url === `${LOCAL_BASE_URL}/api/browse`));
+  assert.deepEqual(main.httpCalls.map((call) => call.options.params.type), ["mv", "tv", "ac"]);
+  assert.notEqual(movies[0].title, tv[0].title);
+  assert.ok([movies[0], tv[0], anime[0]].every((item) => item.posterPath));
 
   const home = loadWidget("gying_home.js", handlers);
-  const homeItems = await home.call("recentMovies()");
-  assert.ok(homeItems.length >= 12);
-  assert.equal(homeItems[0].mediaType, "movie");
+  const homeMovies = await home.call("recentMovies()");
+  const homeTV = await home.call("recentTV()");
+  const homeAnime = await home.call("recentAnime()");
+  assert.ok(homeMovies.length > 0 && homeMovies.length <= 12);
+  assert.ok(homeTV.length > 0 && homeTV.length <= 12);
+  assert.ok(homeAnime.length > 0 && homeAnime.length <= 12);
+  assert.ok(home.httpCalls.every((call) => call.url === `${LOCAL_BASE_URL}/api/home`));
+  assert.notEqual(homeMovies[0].title, homeTV[0].title);
+  assert.ok([homeMovies[0], homeTV[0], homeAnime[0]].every((item) => item.posterPath));
 }
 
 const tests = [
-  testMainRequiresCompleteCookieAndNeverUsesPublicFeed,
-  testMainDeclaresOnlyCookieAuthenticationInputs,
-  testMainRejectsIncompleteCookieWithoutNetwork,
-  testMainKeepsFilteredPagingWithCurrentCookie,
-  testMainAcceptsCookieHeaderAndJsonBody,
-  testMainParsesCommonCookieExports,
-  testMainDoesNotRetryVerificationWithoutResponseCookies,
-  testMainDoesNotFallbackWhenCategoryRequestFails,
-  testMainUsesCompleteCookieForEveryCategory,
-  testMainRedactsCookieFromRequestErrors,
-  testHomeFeedIsPublicAndContinuesPastDuplicates,
+  testMainUsesLocalServiceWithoutAuthentication,
+  testMainMetadataMatchesLocalFilterGroups,
+  testMainKeepsFilteredPagingThroughLocalProxy,
+  testMainAcceptsJsonStringAndMatchesMovieYear,
+  testMainSlicesOneLocalPageAcrossFourForwardPages,
+  testMainUsesCorrectGyingTypeForEveryCategory,
+  testMainKeepsLocalPosterInSourceDetail,
+  testMainNormalizesAbsoluteSourceAndProtocolRelativePoster,
+  testMainDoesNotFallbackWhenLocalRequestFails,
+  testHomeUsesLocalServiceForEverySection,
 ];
-if (process.env.GYING_LIVE === "1") tests.push(testLivePublicFeeds);
+if (process.env.GYING_LIVE === "1") tests.push(testLiveLocalService);
 
 (async () => {
   const failures = [];

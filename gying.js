@@ -1,38 +1,12 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.6.1",
+  version: "5.0.0",
   requiredVersion: "0.0.1",
-  description: "获取 教父.com 完整分类影视列表；需导入已登录浏览器的完整 Cookie",
+  description: "通过局域网 Gying 服务获取电影、剧集和动漫的完整分类列表",
   author: "Antigravity",
-  site: "https://www.xn--wcv59z.com/",
+  site: "http://192.168.3.50:21111/",
   detailCacheDuration: 3600,
-  globalParams: [
-    {
-      name: "cookie",
-      title: "Cookie",
-      type: "input",
-      description: "先在 Chrome 刷新本站并等待安全验证完成，再重新导出；必须包含 app_auth 和 browser_verified",
-      placeholders: [
-        {
-          title: "JSON 格式（推荐）",
-          value: "[{\"name\":\"app_auth\",\"value\":\"xxx\"},{\"name\":\"browser_verified\",\"value\":\"xxx\"},{\"name\":\"PHPSESSID\",\"value\":\"xxx\"}]"
-        }
-      ]
-    },
-    {
-      name: "userAgent",
-      title: "浏览器 User-Agent（必填）",
-      type: "input",
-      description: "必须与导出 Cookie 的浏览器完全一致，可从 Chrome 的 chrome://version 页面复制",
-      placeholders: [
-        {
-          title: "本机 Chrome 150 示例",
-          value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-        }
-      ]
-    }
-  ],
   modules: [
     {
       id: "recentMovies",
@@ -481,113 +455,126 @@ WidgetMetadata = {
   ],
 };
 
-const BASE_URL = "https://www.xn--wcv59z.com";
-const IMG_BASE = "https://s.tutu.pm/img";
-const TARGET_COOKIE_DOMAIN = "xn--wcv59z.com";
-
-function isTargetCookieDomain(value) {
-  const domain = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/^#httponly_/, "")
-    .replace(/^\./, "");
-  return !domain
-    || domain === TARGET_COOKIE_DOMAIN
-    || domain.endsWith(`.${TARGET_COOKIE_DOMAIN}`);
+function namedEnumOptions(values, allTitle) {
+  return [{ title: allTitle || "全部", value: "" }].concat(
+    values.map((value) => ({ title: String(value), value: String(value) }))
+  );
 }
 
-/**
- * 将用户输入的 Cookie 转换为 "name=value; name=value" 格式
- */
-function parseCookieInput(input) {
-  if (!input) return "";
-  let value = String(input).trim();
-  const cookies = new Map();
-
-  // Browser extensions commonly export either [{name, value}] or
-  // {cookies:[{name,value}]}; accepting both avoids silently sending JSON as
-  // one malformed cookie value.
-  if (value.startsWith("[") || value.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(value);
-      const entries = Array.isArray(parsed)
-        ? parsed
-        : (parsed && Array.isArray(parsed.cookies)
-          ? parsed.cookies
-          : (parsed && parsed.name ? [parsed] : Object.keys(parsed || {}).map((name) => ({
-            name: name,
-            value: parsed[name],
-          }))));
-      entries.forEach((cookie) => {
-        if (cookie
-          && isTargetCookieDomain(cookie.domain || cookie.host)
-          && cookie.name
-          && cookie.value !== undefined
-          && cookie.value !== null) {
-          cookies.set(String(cookie.name).trim(), String(cookie.value));
-        }
-      });
-      if (cookies.size > 0) {
-        return Array.from(cookies.entries())
-          .map(([name, cookieValue]) => `${name}=${cookieValue}`)
-          .join("; ");
-      }
-    } catch (_error) {
-      console.error("Cookie JSON 解析失败，将作为原始字符串使用");
-    }
+function createYearOptions() {
+  const currentYear = new Date().getFullYear();
+  const options = [
+    { title: "全部", value: "" },
+    { title: "近三年", value: "3" },
+  ];
+  for (let offset = 0; offset < 10; offset++) {
+    const year = String(currentYear - offset);
+    options.push({ title: year, value: year });
   }
+  return options.concat([
+    { title: "20年代", value: "120" },
+    { title: "10年代", value: "110" },
+    { title: "00年代", value: "100" },
+    { title: "90年代", value: "90" },
+    { title: "80年代", value: "80" },
+    { title: "70年代", value: "70" },
+    { title: "60年代", value: "60" },
+    { title: "更早", value: "1" },
+  ]);
+}
 
-  // Accept a copied `Cookie:`/`Set-Cookie:` header, multiline exports, and
-  // Netscape-style tab-separated cookie files. Attributes are ignored.
-  value = value
-    .replace(/^\s*(?:Cookie|Set-Cookie)\s*:\s*/i, "")
-    .replace(/\r/g, "");
-  value.split("\n").forEach((line) => {
-    let text = line.trim();
-    if (!text) return;
-    // Cookie exports may prefix every line, not just the first one.
-    text = text.replace(/^(?:Cookie|Set-Cookie)\s*:\s*/i, "").trim();
-    const fields = text.split("\t");
-    if (fields.length >= 7 && fields[5] && fields[6]) {
-      if (isTargetCookieDomain(fields[0])) {
-        cookies.set(fields[5].trim(), fields[6].trim());
-      }
-      return;
-    }
-    if (text.startsWith("#")) return;
-    const domainAttribute = text.match(/(?:^|;)\s*domain\s*=\s*([^;]+)/i);
-    if (domainAttribute && !isTargetCookieDomain(domainAttribute[1])) return;
-    text.split(";").forEach((part) => {
-      const separator = part.indexOf("=");
-      if (separator <= 0) return;
-      const name = part.slice(0, separator).trim();
-      const cookieValue = part.slice(separator + 1).trim();
-      if (!name || /^(?:path|domain|expires|max-age|samesite|secure|httponly)$/i.test(name)) return;
-      cookies.set(name, cookieValue);
-    });
+function createEnumParam(name, title, enumOptions) {
+  return {
+    name: name,
+    title: title,
+    type: "enumeration",
+    enumOptions: enumOptions,
+  };
+}
+
+function synchronizeLocalFilterMetadata() {
+  const commonGenres = namedEnumOptions([
+    "剧情", "科幻", "动作", "喜剧", "爱情", "冒险", "儿童", "歌舞", "音乐",
+    "奇幻", "动画", "恐怖", "惊悚", "丧尸", "战争", "传记", "纪录", "犯罪",
+    "悬疑", "西部", "灾难", "古装", "武侠", "家庭", "短片", "校园", "文艺",
+    "运动", "青春", "同性", "励志", "人性", "美食", "女性", "治愈", "历史",
+    "真人秀", "脱口秀",
+  ]);
+  const animeGenres = namedEnumOptions([
+    "剧情", "萌系", "科幻", "日常", "战斗", "战争", "热血", "机战", "游戏",
+    "搞笑", "恋爱", "后宫", "百合", "基腐", "冒险", "儿童", "歌舞", "音乐",
+    "奇幻", "恐怖", "惊悚", "犯罪", "悬疑", "西部", "灾难", "古装", "武侠",
+    "泡面", "校园", "运动", "青春", "美食", "治愈", "致郁", "励志", "历史",
+    "纪录", "异世界",
+  ]);
+  const areas = namedEnumOptions([
+    "海外", "欧美", "亚洲", "美国", "日本", "韩国", "英国", "法国", "德国",
+    "印度", "泰国", "瑞典", "巴西", "大陆", "香港", "台湾", "加拿大", "俄罗斯",
+    "意大利", "西班牙", "澳大利亚",
+  ]);
+  const languages = namedEnumOptions([
+    "英语", "法语", "国语", "粤语", "日语", "韩语", "泰语", "德语", "俄语",
+    "闽南语", "丹麦语", "波兰语", "瑞典语", "印地语", "挪威语", "意大利语",
+    "西班牙语", "无对白",
+  ]);
+  const qualities = namedEnumOptions([
+    "720P", "1080P", "4K", "3D", "BD", "HDR", "DV", "原盘",
+  ]);
+  const states = [
+    { title: "默认", value: "" },
+    { title: "预告", value: "预告" },
+    { title: "枪版", value: "抢先版" },
+  ];
+  const timeRanges = [
+    { title: "不限", value: "" },
+    { title: "7天内", value: "7" },
+    { title: "15天内", value: "15" },
+    { title: "30天内", value: "30" },
+    { title: "60天内", value: "60" },
+    { title: "90天内", value: "90" },
+    { title: "120天内", value: "120" },
+  ];
+
+  WidgetMetadata.modules.forEach((module) => {
+    const byName = {};
+    module.params.forEach((param) => { byName[param.name] = param; });
+    byName.genre.enumOptions = module.id === "recentAnime" ? animeGenres : commonGenres;
+    byName.area.enumOptions = areas;
+    byName.year.enumOptions = createYearOptions();
+    byName.quality.enumOptions = qualities;
+
+    module.params = [
+      byName.page,
+      byName.sort_by,
+      byName.genre,
+      byName.area,
+      createEnumParam("lang", "语言", languages),
+      byName.year,
+      byName.quality,
+      createEnumParam("state", "状态", states),
+      byName.rrange,
+      byName.srange,
+      createEnumParam("trange", "时间范围", timeRanges),
+      createEnumParam("timetype", "时间依据", [
+        { title: "添加时间", value: "" },
+        { title: "更新时间", value: "uptime" },
+        { title: "上映时间", value: "date" },
+      ]),
+      createEnumParam("imdb", "IMDB评分", [
+        { title: "不限", value: "" },
+        { title: "仅有IMDB评分", value: "1" },
+      ]),
+      createEnumParam("playable", "可播放", [
+        { title: "不限", value: "" },
+        { title: "仅可播放", value: "1" },
+      ]),
+    ];
   });
-  return Array.from(cookies.entries())
-    .map(([name, cookieValue]) => `${name}=${cookieValue}`)
-    .join("; ");
 }
 
-function parseCookieMap(cookieString) {
-  const cookies = new Map();
-  String(cookieString || "").split(";").forEach((part) => {
-    const separator = part.indexOf("=");
-    if (separator <= 0) return;
-    const name = part.slice(0, separator).trim();
-    const value = part.slice(separator + 1).trim();
-    if (!name) return;
-    cookies.set(name.toLowerCase(), { name: name, value: value });
-  });
-  return cookies;
-}
+synchronizeLocalFilterMetadata();
 
-function hasCookie(cookieString, name) {
-  const cookie = parseCookieMap(cookieString).get(String(name || "").toLowerCase());
-  return Boolean(cookie && cookie.value);
-}
+const BASE_URL = "http://192.168.3.50:21111";
 
 function responseData(response) {
   if (!response) return null;
@@ -602,32 +589,10 @@ function responseData(response) {
   return data;
 }
 
-function replaceLiteral(value, secret) {
-  if (!secret) return value;
-  return String(value).split(String(secret)).join("<redacted>");
-}
-
-function safeErrorMessage(error, secrets = []) {
-  let message = error && typeof error.message === "string"
+function safeErrorMessage(error) {
+  return error && typeof error.message === "string"
     ? error.message
     : (typeof error === "string" ? error : "未知错误");
-  const secretValues = Array.isArray(secrets) ? secrets : [secrets];
-  secretValues.forEach((secret) => {
-    const value = String(secret || "");
-    if (!value) return;
-    message = replaceLiteral(message, value);
-    try {
-      message = replaceLiteral(message, encodeURIComponent(value));
-    } catch (_error) {}
-  });
-  message = message.replace(
-    /(["']?(?:username|password)["']?\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&;\s,}\]]+)/gi,
-    "$1<redacted>"
-  );
-  return message.replace(
-    /((?:cookie|app_auth|browser_verified|browser_pow)\s*[:=]\s*)[^;\s,}]+/gi,
-    "$1<redacted>"
-  );
 }
 
 /**
@@ -662,32 +627,9 @@ function cleanAnimeTitle(title) {
     .trim();
 }
 
-/**
- * 获取某一页的 JSON 数据，使用 /res/mv 或 /res/tv API
- * 支持可选筛选参数：genre（类型）、area（地区）、year（年代）
- */
-function normalizeUserAgent(value) {
-  return String(value || "").replace(/[\r\n]+/g, " ").trim();
-}
-
-function buildHeaders(cookieString, extraHeaders = {}, userAgent = "") {
-  const headers = {
-    "User-Agent": normalizeUserAgent(userAgent),
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": `${BASE_URL}/`,
-    "X-Requested-With": "XMLHttpRequest",
-  };
-  Object.keys(extraHeaders || {}).forEach((name) => {
-    if (extraHeaders[name] === null || extraHeaders[name] === undefined) delete headers[name];
-    else headers[name] = extraHeaders[name];
-  });
-  if (cookieString) headers.Cookie = cookieString;
-  return headers;
-}
-
-async function fetchGying(type, page, sort, cookieString, filters = {}, options = {}) {
+async function fetchGying(type, page, sort, filters = {}) {
   const query = {
+    type: type,
     sort: sort || "addtime",
     rrange: filters.rrange || "0_10",
     srange: filters.srange || "0",
@@ -697,21 +639,18 @@ async function fetchGying(type, page, sort, cookieString, filters = {}, options 
   if (filters.genre) query.genre = filters.genre;
   if (filters.area) query.region = filters.area;
   if (filters.quality) query.quality = filters.quality;
+  if (filters.lang) query.lang = filters.lang;
+  if (filters.state) query.state = filters.state;
+  if (filters.trange) query.trange = filters.trange;
+  if (filters.timetype) query.timetype = filters.timetype;
+  if (filters.imdb) query.imdb = filters.imdb;
+  if (filters.playable) query.playable = filters.playable;
 
-  const url = `${BASE_URL}/res/${type}`;
+  const url = `${BASE_URL}/api/browse`;
   try {
-    const response = await Widget.http.get(url, {
-      headers: buildHeaders(cookieString, options.headers, options.userAgent),
-      params: query,
-    });
-    // Keep the response envelope so HTTP status fields remain available to the
-    // verification-expiry detector. getListData unwraps `.data` below.
-    return response;
+    return await Widget.http.get(url, { params: query });
   } catch (err) {
-    console.error(`请求 ${url} 失败: ${safeErrorMessage(err, [cookieString])}`);
-    // Keep the original error so callers can inspect HTTP status fields such
-    // as error.response.status instead of mistaking every failure for an
-    // ordinary empty response.
+    console.error(`请求本地 Gying 服务 ${url} 失败: ${safeErrorMessage(err)}`);
     return err || { message: "网络请求失败" };
   }
 }
@@ -719,77 +658,59 @@ async function fetchGying(type, page, sort, cookieString, filters = {}, options 
 function getListData(payload) {
   const body = responseData(payload);
   if (!body || typeof body !== "object") return null;
-  const data = body.inlist && typeof body.inlist === "object"
-    ? body.inlist
-    : body;
-  if (!Array.isArray(data.t) || !Array.isArray(data.i)) return null;
+  const data = body.data && typeof body.data === "object" ? body.data : body;
+  if (!Array.isArray(data.items)) return null;
   return data;
 }
 
-function isVerificationExpired(payload) {
-  const seen = new Set();
-  let expired = false;
-  const textPattern = /(?:浏览器验证|browser verification|verification expired|verify(?:ing)? (?:expired|required|failed))/i;
-  const inspect = (value, depth) => {
-    if (expired || value === null || value === undefined || depth > 5) return;
-    if (typeof value === "string") {
-      if (textPattern.test(value)) {
-        expired = true;
-        return;
-      }
-      const text = value.trim();
-      if ((text.startsWith("{") || text.startsWith("[")) && text.length < 200000) {
-        try {
-          inspect(JSON.parse(text), depth + 1);
-        } catch (_error) {}
-      }
-      return;
-    }
-    if (typeof value !== "object" && typeof value !== "function") return;
-    if (seen.has(value)) return;
-    seen.add(value);
+function absoluteLocalUrl(value) {
+  const url = String(value || "").trim();
+  if (!url) return "";
+  if (/^https?:\/\//i.test(url)) return url;
+  if (url.startsWith("//")) {
+    const protocol = (BASE_URL.match(/^([a-z][a-z0-9+.-]*:)/i) || [])[1] || "http:";
+    return `${protocol}${url}`;
+  }
+  return url.startsWith("/") ? `${BASE_URL}${url}` : `${BASE_URL}/${url}`;
+}
 
-    const statusValues = [value.status, value.statusCode, value.httpStatus];
-    if (statusValues.some((status) => Number(status) === 419)) {
-      expired = true;
-      return;
-    }
-    if (Number(value.code) === 419 || Number(value.refresh) === 1) {
-      expired = true;
-      return;
-    }
+function normalizeSourcePath(value, expectedType) {
+  const path = String(value || "")
+    .trim()
+    .replace(/^https?:\/\/[^/]+/i, "");
+  const match = path.match(/^\/?(mv|tv|ac)\/([^/?#]+)/i);
+  if (!match || match[1].toLowerCase() !== expectedType) return "";
+  return `/${expectedType}/${match[2]}`;
+}
 
-    [value.message, value.msg, value.error, value.cause, value.response, value.data,
-      value.body, value.result, value.payload].forEach((child) => inspect(child, depth + 1));
+function normalizeSourceItem(item, expectedType) {
+  if (!item || typeof item !== "object") return null;
+  const path = normalizeSourcePath(item.href, expectedType);
+  const title = String(item.title || "").trim();
+  if (!path || !title) return null;
+  const rating = Number(item.rating);
+  const yearMatch = String(item.tag || "").match(/\d{4}/);
+  const year = Number(yearMatch ? yearMatch[0] : 0);
+  return {
+    path: path,
+    title: title,
+    posterPath: absoluteLocalUrl(item.poster),
+    rating: Number.isFinite(rating) ? rating : 0,
+    year: Number.isFinite(year) ? year : 0,
   };
-  inspect(payload, 0);
-  return expired;
 }
 
-function getSourceRating(data, index) {
-  if (Array.isArray(data.d)) {
-    const rating = Number(data.d[index]);
-    return Number.isFinite(rating) ? rating : 0;
-  }
-
-  if (Array.isArray(data.z)) {
-    const rating = Number(data.z[index]);
-    return Number.isFinite(rating) ? rating / 10 : 0;
-  }
-
-  return 0;
-}
-
-function buildSourceItem(type, mediaType, title, gid, posterPath, rating) {
+function buildSourceItem(type, mediaType, title, sourcePath, posterPath, rating) {
   const link = `source:${encodeURIComponent(JSON.stringify({
     type: type,
     mediaType: mediaType,
     title: title,
-    gid: gid,
+    path: sourcePath,
+    posterPath: posterPath,
     rating: rating,
   }))}`;
   return {
-    id: `${BASE_URL}/${type}/${gid}`,
+    id: `${BASE_URL}${sourcePath}`,
     type: "url",
     link: link,
     mediaType: mediaType,
@@ -806,17 +727,17 @@ async function loadDetail(link) {
   try {
     const source = JSON.parse(decodeURIComponent(value.slice(7)));
     if (!source || !["mv", "tv", "ac"].includes(source.type)) return null;
-    const gid = String(source.gid || "").trim();
+    const sourcePath = normalizeSourcePath(source.path, source.type);
     const title = String(source.title || "").trim();
-    if (!gid || !title) return null;
+    if (!sourcePath || !title) return null;
 
     return {
-      id: `${BASE_URL}/${source.type}/${gid}`,
+      id: `${BASE_URL}${sourcePath}`,
       type: "url",
       link: value,
       mediaType: source.mediaType === "movie" ? "movie" : "tv",
       title: title,
-      posterPath: `${IMG_BASE}/${source.type}/${gid}/256.webp`,
+      posterPath: absoluteLocalUrl(source.posterPath),
       rating: Number(source.rating) || 0,
     };
   } catch (error) {
@@ -855,8 +776,8 @@ async function searchTMDB(title, mediaType, year) {
 
 /**
  * 虚拟分页逻辑：
- *   教父.com 每页 48 部 → 拆分成 4 个 Forward 页，每页 12 部
- *   Forward page N → 源站 page ceil(N/4)，取第 ((N-1)%4)*12 到 ((N-1)%4)*12+12 条
+ *   本地 Gying 服务每页 48 部 → 拆分成 4 个 Forward 页，每页 12 部
+ *   Forward page N → 服务页 ceil(N/4)，取第 ((N-1)%4)*12 到 ((N-1)%4)*12+12 条
  *
  * 效果：每次滚动只做 12 个并发 TMDB 查询（原来 36 个），速度快 3 倍；数据无损
  */
@@ -868,22 +789,6 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
   params = params || {};
   const forwardPage = Math.max(1, Number(params.page) || 1);
   const sort = params.sort_by || "addtime";
-  const userAgent = normalizeUserAgent(params.userAgent || "");
-  const authenticatedCookie = parseCookieInput(params.cookie || "");
-  if (!authenticatedCookie) {
-    console.error("未填写 Cookie，无法获取教父.com 完整分类列表");
-    return [];
-  }
-  const missingCookies = ["app_auth", "browser_verified"]
-    .filter((name) => !hasCookie(authenticatedCookie, name));
-  if (missingCookies.length > 0) {
-    console.error(`Cookie 缺少 ${missingCookies.join(" 和 ")}，请从已登录且已完成安全验证的浏览器重新导出完整 Cookie`);
-    return [];
-  }
-  if (!userAgent) {
-    console.error("未填写浏览器 User-Agent；browser_verified 与浏览器标识绑定，请填写导出 Cookie 时同一浏览器的完整 User-Agent");
-    return [];
-  }
 
   const filters = {
     year: params.year || "",
@@ -892,6 +797,12 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
     rrange: params.rrange || "0_10",
     srange: params.srange || "0",
     quality: params.quality || "",
+    lang: params.lang || "",
+    state: params.state || "",
+    trange: params.trange || "",
+    timetype: params.timetype || "",
+    imdb: params.imdb || "",
+    playable: params.playable || "",
   };
 
   const gyingPage = Math.ceil(forwardPage / FORWARD_PAGES_PER_GYING);
@@ -899,50 +810,33 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
   const sliceEnd = sliceStart + ITEMS_PER_FORWARD_PAGE;
 
   const filterLog = [filters.year, filters.genre, filters.area].filter(Boolean).join("/") || "无筛选";
-  console.log(`Forward 第 ${forwardPage} 页 → 教父.com 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
+  console.log(`Forward 第 ${forwardPage} 页 → 本地 Gying 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
 
-  const raw = await fetchGying(gyingType, gyingPage, sort, authenticatedCookie, filters, { userAgent: userAgent });
+  const raw = await fetchGying(gyingType, gyingPage, sort, filters);
   const data = getListData(raw);
   if (!data) {
-    if (isVerificationExpired(raw)) {
-      console.error("Cookie 已成功识别并发送，但服务端拒绝了浏览器验证（通常为 419）；请在同一 Chrome 刷新教父.com，等待安全验证完成后立即重新导出完整 Cookie，重复粘贴旧 Cookie 无效");
-    } else {
-      console.error("分类列表请求失败或响应格式无效，请检查 Cookie 与网络状态");
-    }
+    console.error("本地 Gying 服务分类列表请求失败或响应格式无效，请检查服务状态与局域网连接");
     return [];
   }
 
-  if (data.t.length === 0) {
-    console.log(`教父.com 第 ${forwardPage} 页无数据`);
+  if (data.items.length === 0) {
+    console.log(`本地 Gying 第 ${gyingPage} 页无数据`);
     return [];
   }
 
-  const sourceItems = [];
-  const limit = Math.min(sliceEnd, data.t.length);
-  for (let sourceIndex = sliceStart; sourceIndex < limit; sourceIndex++) {
-    const title = String(data.t[sourceIndex] || "").trim();
-    const gid = String(data.i[sourceIndex] || "").trim();
-    if (!title || !gid) continue;
-    sourceItems.push({
-      title: title,
-      gid: gid,
-      rating: getSourceRating(data, sourceIndex),
-      meta: Array.isArray(data.a) && Array.isArray(data.a[sourceIndex])
-        ? data.a[sourceIndex]
-        : [],
-    });
-  }
+  const sourceItems = data.items
+    .slice(sliceStart, sliceEnd)
+    .map((item) => normalizeSourceItem(item, gyingType))
+    .filter(Boolean);
 
   console.log(`取 ${sourceItems.length} 部，并行 TMDB 匹配...`);
 
   const searchPromises = sourceItems.map((item) => {
-    const posterPath = `${IMG_BASE}/${gyingType}/${item.gid}/256.webp`;
     const searchTitle = gyingType === "ac"
       ? cleanAnimeTitle(item.title)
       : (mediaType === "tv" ? cleanTVTitle(item.title) : item.title);
     // 电影才用年份精确匹配；剧集年份是当季播放年非首播年，不传
-    const year = Number(item.meta[0]);
-    const releaseYear = mediaType === "movie" && year > 1900 ? year : null;
+    const releaseYear = mediaType === "movie" && item.year > 1900 ? item.year : null;
 
     return searchTMDB(searchTitle, mediaType, releaseYear).then(tmdb => {
       if (tmdb) {
@@ -953,7 +847,7 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
           originalTitle: tmdb.original_title || tmdb.original_name || "",
           description: tmdb.overview || "",
           releaseDate: tmdb.release_date || tmdb.first_air_date || "",
-          posterPath: tmdb.poster_path || posterPath,
+          posterPath: tmdb.poster_path || item.posterPath,
           backdropPath: tmdb.backdrop_path || "",
           rating: Number(tmdb.vote_average) > 0 ? tmdb.vote_average : item.rating,
           mediaType: mediaType,
@@ -964,8 +858,8 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
         gyingType,
         mediaType,
         item.title,
-        item.gid,
-        posterPath,
+        item.path,
+        item.posterPath,
         item.rating
       );
     });

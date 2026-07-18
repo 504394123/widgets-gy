@@ -1,26 +1,12 @@
 WidgetMetadata = {
   id: "forward.gying2",
   title: "Gying影视(首页)",
-  version: "3.1.1",
+  version: "4.0.0",
   requiredVersion: "0.0.1",
-  description: "获取 教父.com 最新更新的影视数据，通过 TMDB 补全影视信息（Cookie 可选）",
+  description: "通过局域网 Gying 服务获取电影、剧集和动漫的最近更新",
   author: "Antigravity",
-  site: "https://www.xn--wcv59z.com/",
+  site: "http://192.168.3.50:21111/",
   detailCacheDuration: 3600,
-  globalParams: [
-    {
-      name: "cookie",
-      title: "Cookie（可选）",
-      type: "input",
-      description: "公开最近更新无需填写；支持新站导出的 JSON 或 key=value 格式",
-      placeholders: [
-        {
-          title: "JSON 格式（推荐）",
-          value: "[{\"name\":\"app_auth\",\"value\":\"xxx\"},{\"name\":\"browser_verified\",\"value\":\"xxx\"},{\"name\":\"PHPSESSID\",\"value\":\"xxx\"}]"
-        }
-      ]
-    }
-  ],
   modules: [
     {
       id: "recentMovies",
@@ -34,46 +20,16 @@ WidgetMetadata = {
       functionName: "recentTV",
       params: [],
     },
+    {
+      id: "recentAnime",
+      title: "最近更新动漫",
+      functionName: "recentAnime",
+      params: [],
+    },
   ],
 };
 
-const BASE_URL = "https://www.xn--wcv59z.com";
-const IMG_BASE = "https://s.tutu.pm/img";
-
-/**
- * 将用户输入的 Cookie 转换为 "name=value; name=value" 格式
- * 支持两种格式：
- * 1. JSON 数组（浏览器插件导出）：[{"name":"app_auth","value":"xxx"}, ...]
- * 2. 普通字符串：app_auth=xxx; BT_auth=xxx
- */
-function parseCookieInput(input) {
-  if (!input) return "";
-  let trimmed = String(input).trim();
-  trimmed = trimmed
-    .replace(/^Cookie\s*:\s*/i, "")
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\s*;\s*/g, "; ")
-    .trim();
-  if (trimmed.startsWith("[")) {
-    try {
-      const arr = JSON.parse(trimmed);
-      if (Array.isArray(arr)) {
-        const cookies = new Map();
-        arr.forEach((cookie) => {
-          if (cookie && cookie.name && cookie.value !== undefined) {
-            cookies.set(String(cookie.name), String(cookie.value));
-          }
-        });
-        return Array.from(cookies.entries())
-          .map(([name, value]) => `${name}=${value}`)
-          .join("; ");
-      }
-    } catch (e) {
-      console.error("Cookie JSON 解析失败，将作为原始字符串使用");
-    }
-  }
-  return trimmed;
-}
+const BASE_URL = "http://192.168.3.50:21111";
 
 function responseData(response) {
   if (!response) return null;
@@ -89,19 +45,11 @@ function responseData(response) {
 }
 
 function safeErrorMessage(error) {
-  const message = error && typeof error.message === "string"
+  return error && typeof error.message === "string"
     ? error.message
     : (typeof error === "string" ? error : "未知错误");
-  return message.replace(
-    /((?:cookie|app_auth|browser_verified|browser_pow)\s*[:=]\s*)[^;\s,}]+/gi,
-    "$1<redacted>"
-  );
 }
 
-/**
- * 清理剧集标题，去除"第X季"这样的后缀，避免 TMDB 搜索失败
- * 例如：七王国的骑士 第一季 -> 七王国的骑士
- */
 function cleanTVTitle(title) {
   return String(title || "")
     .replace(/\s*第[一二三四五六七八九十百千0-9]+季.*$/, "")
@@ -109,58 +57,86 @@ function cleanTVTitle(title) {
     .trim();
 }
 
-/**
- * 调用 /res/change/{type}/{index} API，返回该批次的影视 JSON 数据
- */
-function buildHeaders(cookieString) {
-  const headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": `${BASE_URL}/`,
-    "X-Requested-With": "XMLHttpRequest",
-  };
-  if (cookieString) headers.Cookie = cookieString;
-  return headers;
+function cleanAnimeTitle(title) {
+  return String(title || "")
+    .replace(/\s*第[一二三四五六七八九十百千0-9]+季.*$/, "")
+    .replace(/\s*Season\s*\d+.*$/i, "")
+    .replace(/\s*年番\s*\d+.*$/, "")
+    .replace(/\s*第[一二三四五六七八九十百千0-9]+期.*$/, "")
+    .replace(/[：:].*$/, "")
+    .trim();
 }
 
-async function fetchGying(type, index, cookieString) {
-  const url = `${BASE_URL}/res/change/${type}/${index}`;
+function absoluteLocalUrl(value) {
+  const url = String(value || "").trim();
+  if (!url) return "";
+  if (/^https?:\/\//i.test(url)) return url;
+  if (url.startsWith("//")) {
+    const protocol = (BASE_URL.match(/^([a-z][a-z0-9+.-]*:)/i) || [])[1] || "http:";
+    return `${protocol}${url}`;
+  }
+  return url.startsWith("/") ? `${BASE_URL}${url}` : `${BASE_URL}/${url}`;
+}
+
+function normalizeSourcePath(value, expectedType) {
+  const path = String(value || "")
+    .trim()
+    .replace(/^https?:\/\/[^/]+/i, "");
+  const match = path.match(/^\/?(mv|tv|ac)\/([^/?#]+)/i);
+  if (!match || match[1].toLowerCase() !== expectedType) return "";
+  return `/${expectedType}/${match[2]}`;
+}
+
+function normalizeSourceItem(item, expectedType) {
+  if (!item || typeof item !== "object") return null;
+  const path = normalizeSourcePath(item.href, expectedType);
+  const title = String(item.title || "").trim();
+  if (!path || !title) return null;
+  const rating = Number(item.rating);
+  const yearMatch = String(item.tag || "").match(/\d{4}/);
+  const year = Number(yearMatch ? yearMatch[0] : 0);
+  return {
+    path: path,
+    title: title,
+    posterPath: absoluteLocalUrl(item.poster),
+    rating: Number.isFinite(rating) ? rating : 0,
+    year: Number.isFinite(year) ? year : 0,
+  };
+}
+
+function getHomeSections(payload) {
+  const body = responseData(payload);
+  if (!body) return null;
+  const sections = Array.isArray(body.data) ? body.data : body;
+  return Array.isArray(sections) ? sections : null;
+}
+
+async function fetchHome() {
+  const url = `${BASE_URL}/api/home`;
   try {
-    const response = await Widget.http.get(url, {
-      headers: buildHeaders(cookieString),
-    });
-    return responseData(response);
-  } catch (err) {
-    console.error(`请求 ${url} 失败: ${safeErrorMessage(err)}`);
+    return await Widget.http.get(url);
+  } catch (error) {
+    console.error(`请求本地 Gying 服务 ${url} 失败: ${safeErrorMessage(error)}`);
     return null;
   }
 }
 
-function getListData(payload) {
-  if (!payload || typeof payload !== "object") return null;
-  const data = payload.inlist && typeof payload.inlist === "object"
-    ? payload.inlist
-    : payload;
-  if (!Array.isArray(data.t) || !Array.isArray(data.i)) return null;
-  return data;
-}
-
-function buildSourceItem(gyingType, mediaType, item) {
+function buildSourceItem(type, mediaType, item) {
   const link = `source:${encodeURIComponent(JSON.stringify({
-    type: gyingType,
+    type: type,
     mediaType: mediaType,
     title: item.title,
-    gid: item.gid,
+    path: item.path,
+    posterPath: item.posterPath,
     rating: item.rating,
   }))}`;
   return {
-    id: `${BASE_URL}/${gyingType}/${item.gid}`,
+    id: `${BASE_URL}${item.path}`,
     type: "url",
     link: link,
     mediaType: mediaType,
     title: item.title,
-    posterPath: `${IMG_BASE}/${gyingType}/${item.gid}/256.webp`,
+    posterPath: item.posterPath,
     rating: item.rating,
   };
 }
@@ -172,17 +148,17 @@ async function loadDetail(link) {
   try {
     const source = JSON.parse(decodeURIComponent(value.slice(7)));
     if (!source || !["mv", "tv", "ac"].includes(source.type)) return null;
-    const gid = String(source.gid || "").trim();
+    const path = normalizeSourcePath(source.path, source.type);
     const title = String(source.title || "").trim();
-    if (!gid || !title) return null;
+    if (!path || !title) return null;
 
     return {
-      id: `${BASE_URL}/${source.type}/${gid}`,
+      id: `${BASE_URL}${path}`,
       type: "url",
       link: value,
       mediaType: source.mediaType === "movie" ? "movie" : "tv",
       title: title,
-      posterPath: `${IMG_BASE}/${source.type}/${gid}/256.webp`,
+      posterPath: absoluteLocalUrl(source.posterPath),
       rating: Number(source.rating) || 0,
     };
   } catch (error) {
@@ -191,9 +167,6 @@ async function loadDetail(link) {
   }
 }
 
-/**
- * 用标题搜索 TMDB，返回第一个匹配结果
- */
 async function searchTMDB(title, mediaType, year) {
   try {
     const api = mediaType === "tv" ? "search/tv" : "search/movie";
@@ -204,96 +177,66 @@ async function searchTMDB(title, mediaType, year) {
     if (mediaType === "movie" && year > 1900) {
       searchParams.year = year;
     }
-    const response = await Widget.tmdb.get(api, {
-      params: searchParams,
-    });
-    if (response && response.results && response.results.length > 0) {
+    const response = await Widget.tmdb.get(api, { params: searchParams });
+    if (response && Array.isArray(response.results) && response.results.length > 0) {
       return response.results[0];
     }
-  } catch (err) {
-    console.error(`TMDB 搜索"${title}"失败: ${safeErrorMessage(err)}`);
+  } catch (error) {
+    console.error(`TMDB 搜索"${title}"失败: ${safeErrorMessage(error)}`);
   }
   return null;
 }
 
-/**
- * 获取最近更新影视，结合 Gying 列表 + TMDB 数据
- */
-async function fetchRecent(gyingType, mediaType, params = {}) {
-  params = params || {};
-  const cookieString = parseCookieInput(params.cookie || "");
-
-  const allTitles = [];
-  const seenIds = new Set();
-  const MAX_PAGES = 5;
-
-  // 第一步：从 Gying 拿到所有不重复的片名列表
-  for (let i = 1; i <= MAX_PAGES; i++) {
-    const raw = await fetchGying(gyingType, i, cookieString);
-
-    const data = getListData(raw);
-    if (!data) {
-      console.log(`第 ${i} 批次响应无效，停止`);
-      break;
-    }
-
-    const titles = data.t;
-    const ids = data.i;
-    if (titles.length === 0) break;
-
-    let added = 0;
-    for (let n = 0; n < titles.length; n++) {
-      const title = String(titles[n] || "").trim();
-      const gid = String(ids[n] || "").trim();
-      if (!title || !gid || seenIds.has(gid)) continue;
-      seenIds.add(gid);
-      const rating = Array.isArray(data.d) && Number.isFinite(Number(data.d[n]))
-        ? Number(data.d[n])
-        : 0;
-      const meta = Array.isArray(data.a) && Array.isArray(data.a[n])
-        ? data.a[n]
-        : [];
-      allTitles.push({ title: title, gid: gid, rating: rating, year: Number(meta[0]) || 0 });
-      added++;
-    }
-
-    console.log(`第 ${i} 批次：新增 ${added} 部，累计 ${allTitles.length} 部不重复`);
+async function fetchRecent(gyingType, mediaType) {
+  const raw = await fetchHome();
+  const sections = getHomeSections(raw);
+  if (!sections) {
+    console.error("本地 Gying 首页请求失败或响应格式无效，请检查服务状态与局域网连接");
+    return [];
   }
 
-  console.log(`教父.com 共抓取 ${allTitles.length} 部，开始并行 TMDB 匹配...`);
+  const section = sections.find((entry) => entry && entry.type === gyingType);
+  const rawItems = section && Array.isArray(section.items) ? section.items : [];
+  const sourceItems = rawItems
+    .slice(0, 12)
+    .map((item) => normalizeSourceItem(item, gyingType))
+    .filter(Boolean);
 
-  // 并行搜索所有影片（Promise.all 同时发起所有请求，大幅提速）
-  const searchPromises = allTitles.map(item => {
-    const searchTitle = mediaType === "tv" ? cleanTVTitle(item.title) : item.title;
-    return searchTMDB(searchTitle, mediaType, item.year).then(tmdb => {
-      if (tmdb) {
-        return {
-          id: tmdb.id,
-          type: "tmdb",
-          title: tmdb.title || tmdb.name || item.title,
-          originalTitle: tmdb.original_title || tmdb.original_name || "",
-          description: tmdb.overview || "",
-          releaseDate: tmdb.release_date || tmdb.first_air_date || "",
-          posterPath: tmdb.poster_path || `${IMG_BASE}/${gyingType}/${item.gid}/256.webp`,
-          backdropPath: tmdb.backdrop_path || "",
-          rating: Number(tmdb.vote_average) > 0 ? tmdb.vote_average : item.rating,
-          mediaType: mediaType,
-        };
-      }
-      console.log(`"${item.title}" 未在 TMDB 找到匹配，保留来源条目`);
-      return buildSourceItem(gyingType, mediaType, item);
+  const results = await Promise.all(sourceItems.map((item) => {
+    const searchTitle = gyingType === "ac"
+      ? cleanAnimeTitle(item.title)
+      : (mediaType === "tv" ? cleanTVTitle(item.title) : item.title);
+    const releaseYear = mediaType === "movie" && item.year > 1900 ? item.year : null;
+
+    return searchTMDB(searchTitle, mediaType, releaseYear).then((tmdb) => {
+      if (!tmdb) return buildSourceItem(gyingType, mediaType, item);
+      return {
+        id: tmdb.id,
+        type: "tmdb",
+        title: tmdb.title || tmdb.name || item.title,
+        originalTitle: tmdb.original_title || tmdb.original_name || "",
+        description: tmdb.overview || "",
+        releaseDate: tmdb.release_date || tmdb.first_air_date || "",
+        posterPath: tmdb.poster_path || item.posterPath,
+        backdropPath: tmdb.backdrop_path || "",
+        rating: Number(tmdb.vote_average) > 0 ? tmdb.vote_average : item.rating,
+        mediaType: mediaType,
+      };
     });
-  });
+  }));
 
-  const results = await Promise.all(searchPromises);
-  console.log(`完成，共返回 ${results.length} 部影视`);
+  console.log(`本地 Gying 首页 ${gyingType} 返回 ${results.length} 部`);
   return results;
 }
 
-async function recentMovies(params = {}) {
-  return await fetchRecent("mv", "movie", params || {});
+async function recentMovies() {
+  return await fetchRecent("mv", "movie");
 }
 
-async function recentTV(params = {}) {
-  return await fetchRecent("tv", "tv", params || {});
+async function recentTV() {
+  return await fetchRecent("tv", "tv");
+}
+
+async function recentAnime() {
+  return await fetchRecent("ac", "tv");
 }
