@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.6.0",
+  version: "4.6.1",
   requiredVersion: "0.0.1",
   description: "获取 教父.com 完整分类影视列表；需导入已登录浏览器的完整 Cookie",
   author: "Antigravity",
@@ -12,7 +12,7 @@ WidgetMetadata = {
       name: "cookie",
       title: "Cookie",
       type: "input",
-      description: "从已登录且已完成安全验证的浏览器导出，必须同时包含 app_auth 和 browser_verified",
+      description: "先在 Chrome 刷新本站并等待安全验证完成，再重新导出；必须包含 app_auth 和 browser_verified",
       placeholders: [
         {
           title: "JSON 格式（推荐）",
@@ -905,7 +905,7 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
   const data = getListData(raw);
   if (!data) {
     if (isVerificationExpired(raw)) {
-      console.error("浏览器验证已过期或 User-Agent 不匹配；请在同一浏览器重新完成验证并导出包含 app_auth 和 browser_verified 的完整 Cookie");
+      console.error("Cookie 已成功识别并发送，但服务端拒绝了浏览器验证（通常为 419）；请在同一 Chrome 刷新教父.com，等待安全验证完成后立即重新导出完整 Cookie，重复粘贴旧 Cookie 无效");
     } else {
       console.error("分类列表请求失败或响应格式无效，请检查 Cookie 与网络状态");
     }

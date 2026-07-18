@@ -88,11 +88,13 @@ async function testMainDeclaresOnlyCookieAuthenticationInputs() {
   const widget = loadWidget("gying.js");
   const params = widget.metadata.globalParams;
 
+  assert.equal(widget.metadata.version, "4.6.1");
   assert.deepEqual(Array.from(params, (param) => String(param.name)), ["cookie", "userAgent"]);
   assert.equal(params[0].type, "input");
   assert.equal(params[1].type, "input");
   assert.match(params[0].description, /app_auth/);
   assert.match(params[0].description, /browser_verified/);
+  assert.match(params[0].description, /刷新.*安全验证.*重新导出/);
   assert.match(params[1].title, /必填/);
   assert.equal(Object.hasOwn(params[1], "value"), false);
   assert.doesNotMatch(JSON.stringify(widget.metadata), /账号密码/);
@@ -272,7 +274,11 @@ async function testMainDoesNotRetryVerificationWithoutResponseCookies() {
     `${NEW_BASE_URL}/res/mv`,
   ]);
   assert.equal(widget.httpCalls.some((call) => call.method === "POST"), false);
-  assert.match(widget.logs.error.join("\n"), /浏览器验证|重新导出|browser_verified/);
+  const errors = widget.logs.error.join("\n");
+  assert.match(errors, /Cookie 已成功识别并发送/);
+  assert.match(errors, /419/);
+  assert.match(errors, /刷新.*安全验证/);
+  assert.match(errors, /重新导出/);
 }
 
 async function testMainDoesNotFallbackWhenCategoryRequestFails() {
