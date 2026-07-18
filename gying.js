@@ -1,24 +1,49 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.4.1",
+  version: "4.5.0",
   requiredVersion: "0.0.1",
-  description: "获取 教父.com 完整分类影视列表；需要有效 app_auth，验证失效时尝试自动刷新",
+  description: "获取 教父.com 完整分类影视列表；支持 Cookie 或账号密码登录",
   author: "Antigravity",
   site: "https://www.xn--wcv59z.com/",
   detailCacheDuration: 3600,
   globalParams: [
     {
+      name: "authMode",
+      title: "登录方式",
+      type: "enumeration",
+      value: "cookie",
+      enumOptions: [
+        { title: "Cookie", value: "cookie" },
+        { title: "账号密码", value: "account" },
+      ],
+    },
+    {
       name: "cookie",
-      title: "Cookie（必填）",
+      title: "Cookie",
       type: "input",
       description: "填写新站当前 Cookie（至少包含 app_auth）；验证失效时尝试 PoW 刷新，宿主不返回 Set-Cookie 时需重新导入",
+      belongTo: { paramName: "authMode", value: ["cookie"] },
       placeholders: [
         {
           title: "JSON 格式（推荐）",
           value: "[{\"name\":\"app_auth\",\"value\":\"xxx\"},{\"name\":\"browser_verified\",\"value\":\"xxx\"},{\"name\":\"PHPSESSID\",\"value\":\"xxx\"}]"
         }
       ]
+    },
+    {
+      name: "username",
+      title: "账号/邮箱",
+      type: "input",
+      description: "仅用于本次登录请求，不写入脚本或 Widget.storage",
+      belongTo: { paramName: "authMode", value: ["account"] },
+    },
+    {
+      name: "password",
+      title: "密码（普通文本）",
+      type: "input",
+      description: "Forward 暂无密码框；内容可能出现在本地配置或调试日志中",
+      belongTo: { paramName: "authMode", value: ["account"] },
     },
     {
       name: "userAgent",
@@ -486,6 +511,7 @@ const IMG_BASE = "https://s.tutu.pm/img";
 const DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const VERIFICATION_COOKIE_NAMES = new Set(["browser_verified", "browser_pow"]);
 const POW_CACHE_TTL_MS = 20 * 60 * 60 * 1000;
+const LOGIN_CACHE_TTL_MS = 60 * 60 * 1000;
 // The live site currently sends 2048-bit values and t=400000. Keep bounded
 // headroom, but reject pathological challenges before BigInt allocates.
 const POW_MAX_ITERATIONS = 800000;
@@ -494,6 +520,8 @@ const POW_BATCH_SIZE = 8192;
 const POW_MIN_DURATION_MS = 3000;
 const verificationCache = new Map();
 const verificationInFlight = new Map();
+const loginCache = new Map();
+const loginInFlight = new Map();
 
 /**
  * 将用户输入的 Cookie 转换为 "name=value; name=value" 格式
@@ -776,10 +804,28 @@ function responseData(response) {
   return data;
 }
 
-function safeErrorMessage(error) {
-  const message = error && typeof error.message === "string"
+function replaceLiteral(value, secret) {
+  if (!secret) return value;
+  return String(value).split(String(secret)).join("<redacted>");
+}
+
+function safeErrorMessage(error, secrets = []) {
+  let message = error && typeof error.message === "string"
     ? error.message
     : (typeof error === "string" ? error : "未知错误");
+  const secretValues = Array.isArray(secrets) ? secrets : [secrets];
+  secretValues.forEach((secret) => {
+    const value = String(secret || "");
+    if (!value) return;
+    message = replaceLiteral(message, value);
+    try {
+      message = replaceLiteral(message, encodeURIComponent(value));
+    } catch (_error) {}
+  });
+  message = message.replace(
+    /(["']?(?:username|password)["']?\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^&;\s,}\]]+)/gi,
+    "$1<redacted>"
+  );
   return message.replace(
     /((?:cookie|app_auth|browser_verified|browser_pow)\s*[:=]\s*)[^;\s,}]+/gi,
     "$1<redacted>"
@@ -1013,6 +1059,105 @@ async function refreshBrowserVerification(cookieString, userAgent) {
   return await promise;
 }
 
+function encodeForm(fields) {
+  return Object.keys(fields || {}).map((name) => {
+    const value = fields[name] === null || fields[name] === undefined ? "" : fields[name];
+    return `${encodeURIComponent(name)}=${encodeURIComponent(String(value))}`;
+  }).join("&");
+}
+
+function fingerprintText(value) {
+  const text = String(value || "");
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193);
+    second = Math.imul(second ^ code, 0x5bd1e995);
+    second ^= second >>> 13;
+  }
+  return `${text.length}:${(first >>> 0).toString(16)}:${(second >>> 0).toString(16)}`;
+}
+
+function credentialFingerprint(username, password, userAgent) {
+  return [username, password, normalizeUserAgent(userAgent)]
+    .map((value) => fingerprintText(value))
+    .join(":");
+}
+
+async function performCredentialLogin(username, password, userAgent) {
+  const verification = await refreshBrowserVerification("", userAgent);
+  if (!verification || !verification.hasExplicitVerificationCookie) {
+    throw new Error("Forward 未暴露 browser_verified Cookie，无法建立登录会话");
+  }
+
+  const response = await Widget.http.post(
+    `${BASE_URL}/user/login`,
+    encodeForm({
+      code: "",
+      siteid: 1,
+      dosubmit: 1,
+      cookietime: 10506240,
+      username: username,
+      password: password,
+    }),
+    {
+      allow_redirects: false,
+      headers: buildHeaders(verification.cookieString, {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": BASE_URL,
+        "Referer": `${BASE_URL}/user/login`,
+        "X-Requested-With": null,
+      }, userAgent),
+    }
+  );
+  const result = responseData(response);
+  if (result && Number(result.captcha) === 2) {
+    throw new Error("账号登录需要验证码；请先在浏览器完成验证，再改用 Cookie 登录方式");
+  }
+  if (!result || Number(result.code) !== 200) {
+    const reason = result && (result.msg || result.message);
+    throw new Error(reason ? `账号或密码登录失败：${String(reason)}` : "账号或密码登录失败");
+  }
+
+  const responseCookies = mergeCookieStrings("", getSetCookieLines(response));
+  if (!hasCookie(responseCookies, "app_auth")) {
+    throw new Error("登录响应成功，但 Forward 未暴露 app_auth Cookie；请改用 Cookie 登录方式");
+  }
+  return {
+    cookieString: mergeCookieStrings(verification.cookieString, getSetCookieLines(response)),
+  };
+}
+
+async function loginWithCredentials(usernameValue, passwordValue, userAgent) {
+  const username = String(usernameValue || "").trim();
+  const password = passwordValue === null || passwordValue === undefined
+    ? ""
+    : String(passwordValue);
+  if (!username || !password) throw new Error("账号和密码均为必填项");
+  if (username.length > 320) throw new Error("账号长度超出支持范围");
+  if (password.length > 1024) throw new Error("密码长度超出支持范围");
+
+  const key = credentialFingerprint(username, password, userAgent);
+  const cached = loginCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+  if (loginInFlight.has(key)) return await loginInFlight.get(key);
+
+  const promise = performCredentialLogin(username, password, userAgent)
+    .then((session) => {
+      const cachedSession = {
+        cookieString: session.cookieString,
+        expiresAt: Date.now() + LOGIN_CACHE_TTL_MS,
+      };
+      loginCache.set(key, cachedSession);
+      return cachedSession;
+    })
+    .finally(() => loginInFlight.delete(key));
+  loginInFlight.set(key, promise);
+  return await promise;
+}
+
 function getListData(payload) {
   const body = responseData(payload);
   if (!body || typeof body !== "object") return null;
@@ -1163,15 +1308,31 @@ const FORWARD_PAGES_PER_GYING = Math.ceil(GYING_ITEMS_PER_PAGE / ITEMS_PER_FORWA
 
 async function fetchRecent(gyingType, mediaType, params = {}) {
   params = params || {};
-  const cookieString = parseCookieInput(params.cookie || "");
-  if (!cookieString) {
-    console.error("未填写 Cookie，无法获取教父.com 完整分类列表");
-    return [];
-  }
-
   const forwardPage = Math.max(1, Number(params.page) || 1);
   const sort = params.sort_by || "addtime";
   const userAgent = normalizeUserAgent(params.userAgent || "");
+  const requestedAuthMode = String(params.authMode || "").trim().toLowerCase();
+  const hasCredentialInput = params.username !== undefined || params.password !== undefined;
+  const accountMode = requestedAuthMode === "account"
+    || (!requestedAuthMode && !params.cookie && hasCredentialInput);
+  const credentialSecrets = accountMode ? [params.username, params.password] : [];
+  let authenticatedCookie = "";
+  if (accountMode) {
+    try {
+      const session = await loginWithCredentials(params.username, params.password, userAgent);
+      authenticatedCookie = session.cookieString;
+    } catch (error) {
+      console.error(`账号登录失败：${safeErrorMessage(error, credentialSecrets)}`);
+      return [];
+    }
+  } else {
+    authenticatedCookie = parseCookieInput(params.cookie || "");
+    if (!authenticatedCookie) {
+      console.error("未填写 Cookie，无法获取教父.com 完整分类列表");
+      return [];
+    }
+  }
+
   const filters = {
     year: params.year || "",
     genre: params.genre || "",
@@ -1188,7 +1349,7 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
   const filterLog = [filters.year, filters.genre, filters.area].filter(Boolean).join("/") || "无筛选";
   console.log(`Forward 第 ${forwardPage} 页 → 教父.com 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
 
-  let activeCookie = cookieString;
+  let activeCookie = authenticatedCookie;
   let raw = await fetchGying(gyingType, gyingPage, sort, activeCookie, filters, { userAgent: userAgent });
   let data = getListData(raw);
   if (!data && isVerificationExpired(raw)) {
@@ -1198,10 +1359,10 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
         // A cached browser_verified may have been revoked before its local TTL.
         // Drop it after a failed retry and recompute the proof once in this call.
         if (refreshAttempt > 0) {
-          invalidateVerificationCache(cookieString, userAgent);
+          invalidateVerificationCache(authenticatedCookie, userAgent);
           console.log("缓存的浏览器验证已失效，重新计算验证");
         }
-        const refreshed = await refreshBrowserVerification(cookieString, userAgent);
+        const refreshed = await refreshBrowserVerification(authenticatedCookie, userAgent);
         if (!refreshed || !refreshed.hasExplicitVerificationCookie) {
           throw new Error("Forward 未暴露 browser_verified Cookie；请重新导入完整有效 Cookie");
         }
@@ -1211,7 +1372,7 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
         if (data || !isVerificationExpired(raw)) break;
       }
     } catch (error) {
-      console.error(`自动刷新浏览器验证失败：${error && error.message ? error.message : error}`);
+      console.error(`自动刷新浏览器验证失败：${safeErrorMessage(error, credentialSecrets)}`);
       return [];
     }
   }
