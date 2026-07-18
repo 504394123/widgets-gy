@@ -1,18 +1,18 @@
 WidgetMetadata = {
   id: "forward.gying",
   title: "Gying影视",
-  version: "4.1.0",
+  version: "4.1.1",
   requiredVersion: "0.0.1",
-  description: "获取 教父.com 影视数据；最近更新无需 Cookie，筛选与深度翻页需配置新站 Cookie",
+  description: "获取 教父.com 完整分类影视列表，需配置已通过新站安全验证的 Cookie",
   author: "Antigravity",
   site: "https://www.xn--wcv59z.com/",
   detailCacheDuration: 3600,
   globalParams: [
     {
       name: "cookie",
-      title: "Cookie（可选）",
+      title: "Cookie（必填）",
       type: "input",
-      description: "不填可看最近更新；筛选与更多分页需粘贴新站导出的 Cookie",
+      description: "请从已通过安全验证的新站浏览器导出完整 Cookie；验证失效后需重新导出",
       placeholders: [
         {
           title: "JSON 格式（推荐）",
@@ -471,7 +471,6 @@ WidgetMetadata = {
 
 const BASE_URL = "https://www.xn--wcv59z.com";
 const IMG_BASE = "https://s.tutu.pm/img";
-const PUBLIC_FEED_PAGES = 5;
 
 /**
  * 将用户输入的 Cookie 转换为 "name=value; name=value" 格式
@@ -565,19 +564,6 @@ async function fetchGying(type, page, sort, cookieString, filters = {}) {
     const response = await Widget.http.get(url, {
       headers: buildHeaders(cookieString),
       params: query,
-    });
-    return response.data || null;
-  } catch (err) {
-    console.error(`请求 ${url} 失败`, err);
-    return null;
-  }
-}
-
-async function fetchPublicFeed(type, index, cookieString) {
-  const url = `${BASE_URL}/res/change/${type}/${index}`;
-  try {
-    const response = await Widget.http.get(url, {
-      headers: buildHeaders(cookieString),
     });
     return response.data || null;
   } catch (err) {
@@ -703,6 +689,11 @@ const FORWARD_PAGES_PER_GYING = Math.ceil(GYING_ITEMS_PER_PAGE / ITEMS_PER_FORWA
 async function fetchRecent(gyingType, mediaType, params = {}) {
   params = params || {};
   const cookieString = parseCookieInput(params.cookie || "");
+  if (!cookieString) {
+    console.error("未填写 Cookie，无法获取教父.com 完整分类列表");
+    return [];
+  }
+
   const forwardPage = Math.max(1, Number(params.page) || 1);
   const sort = params.sort_by || "addtime";
   const filters = {
@@ -714,39 +705,22 @@ async function fetchRecent(gyingType, mediaType, params = {}) {
     quality: params.quality || "",
   };
 
-  // 有有效 Cookie 时保留完整筛选和深度分页；验证失效则退回公开更新流。
   const gyingPage = Math.ceil(forwardPage / FORWARD_PAGES_PER_GYING);
-  let sliceStart = ((forwardPage - 1) % FORWARD_PAGES_PER_GYING) * ITEMS_PER_FORWARD_PAGE;
-  let sliceEnd = sliceStart + ITEMS_PER_FORWARD_PAGE;
-  let data = null;
+  const sliceStart = ((forwardPage - 1) % FORWARD_PAGES_PER_GYING) * ITEMS_PER_FORWARD_PAGE;
+  const sliceEnd = sliceStart + ITEMS_PER_FORWARD_PAGE;
 
   const filterLog = [filters.year, filters.genre, filters.area].filter(Boolean).join("/") || "无筛选";
-  if (cookieString) {
-    console.log(`Forward 第 ${forwardPage} 页 → 教父.com 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
-    const raw = await fetchGying(gyingType, gyingPage, sort, cookieString, filters);
-    data = getListData(raw);
-    if (!data) {
-      if (isVerificationExpired(raw)) {
-        console.warn("浏览器验证已过期，改用公开最近更新列表");
-      } else {
-        console.warn("筛选列表不可用，改用公开最近更新列表");
-      }
-    }
-  }
+  console.log(`Forward 第 ${forwardPage} 页 → 教父.com 第 ${gyingPage} 页 [${sliceStart}-${sliceEnd}]（排序：${sort} | ${filterLog}）`);
 
+  const raw = await fetchGying(gyingType, gyingPage, sort, cookieString, filters);
+  const data = getListData(raw);
   if (!data) {
-    if (forwardPage > PUBLIC_FEED_PAGES) {
-      console.log("公开最近更新列表仅提供前 5 页；更多分页需要有效 Cookie");
-      return [];
+    if (isVerificationExpired(raw)) {
+      console.error("浏览器验证已过期，请刷新教父.com 并重新导出完整 Cookie");
+    } else {
+      console.error("分类列表请求失败或响应格式无效，请检查 Cookie 与网络状态");
     }
-    const raw = await fetchPublicFeed(gyingType, forwardPage, cookieString);
-    data = getListData(raw);
-    if (!data) {
-      console.error("公开最近更新列表请求失败");
-      return [];
-    }
-    sliceStart = 0;
-    sliceEnd = ITEMS_PER_FORWARD_PAGE;
+    return [];
   }
 
   if (data.t.length === 0) {

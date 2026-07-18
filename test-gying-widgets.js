@@ -60,53 +60,19 @@ function changePayload(type, rows) {
   };
 }
 
-async function testMainUsesPublicFeedWithoutCookie() {
+async function testMainRequiresCookieAndNeverUsesPublicFeed() {
   const widget = loadWidget("gying.js", {
     httpGet: async (url) => {
-      assert.equal(url, `${NEW_BASE_URL}/res/change/mv/1`);
-      return {
-        data: changePayload("mv", [
-          { title: "已匹配电影", id: "m1", rating: 8.1, year: 2026 },
-          { title: "未匹配电影", id: "m2", rating: 7.2, year: 2025 },
-        ]),
-      };
-    },
-    tmdbGet: async (_api, options) => {
-      if (options.params.query === "已匹配电影") {
-        return {
-          results: [{
-            id: 101,
-            title: "已匹配电影",
-            poster_path: "/tmdb.jpg",
-            backdrop_path: "/backdrop.jpg",
-            vote_average: 8.5,
-          }],
-        };
-      }
-      return { results: [] };
+      throw new Error(`gying.js must not use a public fallback: ${url}`);
     },
   });
 
   assert.equal(widget.metadata.site, `${NEW_BASE_URL}/`);
-  const items = await widget.call("recentMovies({ page: 1 })");
+  const items = await widget.call('recentMovies({ page: 1, genre: "科幻" })');
 
-  assert.equal(items.length, 2);
-  assert.equal(items[0].id, 101);
-  assert.equal(items[0].type, "tmdb");
-  assert.equal(items[0].mediaType, "movie");
-  assert.equal(items[1].type, "url");
-  assert.equal(items[1].mediaType, "movie");
-  assert.equal(items[1].id, `${NEW_BASE_URL}/mv/m2`);
-  assert.match(items[1].link, /^source:/);
-  assert.equal(items[1].posterPath, "https://s.tutu.pm/img/mv/m2/256.webp");
-  widget.context.__sourceLink = items[1].link;
-  const detail = await widget.call("loadDetail(__sourceLink)");
-  assert.equal(detail.id, `${NEW_BASE_URL}/mv/m2`);
-  assert.equal(detail.type, "url");
-  assert.equal(detail.link, items[1].link);
-  assert.equal(detail.title, "未匹配电影");
-  assert.equal(detail.mediaType, "movie");
-  assert.equal(widget.httpCalls.length, 1);
+  assert.equal(items.length, 0);
+  assert.equal(widget.httpCalls.length, 0);
+  assert.equal(widget.tmdbCalls.length, 0);
 }
 
 async function testMainKeepsFilteredPagingWithCurrentCookie() {
@@ -115,6 +81,12 @@ async function testMainKeepsFilteredPagingWithCurrentCookie() {
       assert.equal(url, `${NEW_BASE_URL}/res/tv`);
       assert.equal(options.params.page, 2);
       assert.equal(options.params.sort, "addtime");
+      assert.equal(options.params.genre, "科幻");
+      assert.equal(options.params.region, "美国");
+      assert.equal(options.params.year, "2025");
+      assert.equal(options.params.quality, "4K");
+      assert.equal(options.params.rrange, "7_10");
+      assert.equal(options.params.srange, "10000");
       assert.equal(options.headers.Referer, `${NEW_BASE_URL}/`);
       assert.equal(options.headers.Cookie, "app_auth=new; browser_verified=proof");
       const offset = (options.params.page - 1) * 48;
@@ -142,7 +114,16 @@ async function testMainKeepsFilteredPagingWithCurrentCookie() {
     { name: "app_auth", value: "new" },
     { name: "browser_verified", value: "proof" },
   ]);
-  const items = await widget.call(`recentTV({ page: 5, cookie: ${JSON.stringify(cookie)} })`);
+  const items = await widget.call(`recentTV({
+    page: 5,
+    cookie: ${JSON.stringify(cookie)},
+    genre: "科幻",
+    area: "美国",
+    year: "2025",
+    quality: "4K",
+    rrange: "7_10",
+    srange: "10000"
+  })`);
 
   assert.equal(items.length, 12);
   assert.equal(items[0].title, "剧集 48");
@@ -152,29 +133,41 @@ async function testMainKeepsFilteredPagingWithCurrentCookie() {
   assert.equal(items[0].posterPath, "https://s.tutu.pm/img/tv/tv48/256.webp");
 }
 
-async function testMainFallsBackWhenVerificationExpired() {
+async function testMainDoesNotFallbackWhenVerificationExpired() {
   const widget = loadWidget("gying.js", {
     httpGet: async (url) => {
       if (url === `${NEW_BASE_URL}/res/mv`) {
         return { data: { code: 419, refresh: 1, msg: "浏览器验证已过期，请刷新页面" } };
       }
-      if (url === `${NEW_BASE_URL}/res/change/mv/2`) {
-        return {
-          data: changePayload("mv", [
-            { title: "降级电影", id: "fallback", rating: 6.9, year: 2026 },
-          ]),
-        };
-      }
-      throw new Error(`Unexpected HTTP GET: ${url}`);
+      throw new Error(`gying.js must not use a public fallback: ${url}`);
     },
   });
 
-  const items = await widget.call('recentMovies({ page: 2, cookie: "app_auth=x" })');
-  assert.equal(items.length, 1);
-  assert.equal(items[0].title, "降级电影");
+  const items = await widget.call(
+    'recentMovies({ page: 2, genre: "科幻", cookie: "app_auth=x" })'
+  );
+  assert.equal(items.length, 0);
   assert.deepEqual(
     widget.httpCalls.map((call) => call.url),
-    [`${NEW_BASE_URL}/res/mv`, `${NEW_BASE_URL}/res/change/mv/2`]
+    [`${NEW_BASE_URL}/res/mv`]
+  );
+}
+
+async function testMainDoesNotFallbackWhenCategoryRequestFails() {
+  const widget = loadWidget("gying.js", {
+    httpGet: async (url) => {
+      assert.equal(url, `${NEW_BASE_URL}/res/ac`);
+      throw new Error("network unavailable");
+    },
+  });
+
+  const items = await widget.call(
+    'recentAnime({ page: 1, genre: "科幻", cookie: "app_auth=x" })'
+  );
+  assert.equal(items.length, 0);
+  assert.deepEqual(
+    widget.httpCalls.map((call) => call.url),
+    [`${NEW_BASE_URL}/res/ac`]
   );
 }
 
@@ -238,26 +231,12 @@ async function testLivePublicFeeds() {
     tmdbGet: async () => ({ results: [] }),
   };
   const main = loadWidget("gying.js", handlers);
-  const cases = [
-    { expression: "recentMovies({ page: 1 })", type: "mv", mediaType: "movie" },
-    { expression: "recentTV({ page: 1 })", type: "tv", mediaType: "tv" },
-    { expression: "recentAnime({ page: 1 })", type: "ac", mediaType: "tv" },
-  ];
-
-  for (const testCase of cases) {
-    const items = await main.call(testCase.expression);
-    assert.equal(items.length, 12);
-    assert.equal(items[0].type, "url");
-    assert.equal(items[0].mediaType, testCase.mediaType);
-    assert.match(items[0].id, new RegExp(`^${NEW_BASE_URL}/${testCase.type}/`));
-    assert.match(items[0].posterPath, new RegExp(`/img/${testCase.type}/`));
-  }
-
-  const fallbackItems = await main.call(
-    'recentMovies({ page: 1, cookie: "app_auth=invalid; browser_verified=invalid" })'
+  const invalidCookieItems = await main.call(
+    'recentMovies({ page: 1, genre: "科幻", cookie: "app_auth=invalid; browser_verified=invalid" })'
   );
-  assert.equal(fallbackItems.length, 12);
+  assert.equal(invalidCookieItems.length, 0);
   assert.ok(main.httpCalls.some((call) => call.url === `${NEW_BASE_URL}/res/mv`));
+  assert.equal(main.httpCalls.some((call) => call.url.includes("/res/change/")), false);
 
   const home = loadWidget("gying_home.js", handlers);
   const homeItems = await home.call("recentMovies()");
@@ -266,9 +245,10 @@ async function testLivePublicFeeds() {
 }
 
 const tests = [
-  testMainUsesPublicFeedWithoutCookie,
+  testMainRequiresCookieAndNeverUsesPublicFeed,
   testMainKeepsFilteredPagingWithCurrentCookie,
-  testMainFallsBackWhenVerificationExpired,
+  testMainDoesNotFallbackWhenVerificationExpired,
+  testMainDoesNotFallbackWhenCategoryRequestFails,
   testHomeFeedIsPublicAndContinuesPastDuplicates,
 ];
 if (process.env.GYING_LIVE === "1") tests.push(testLivePublicFeeds);
