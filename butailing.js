@@ -1,9 +1,9 @@
 WidgetMetadata = {
     id: "forward.butailing",
     title: "不太冷影视",
-    version: "1.0.0",
+    version: "1.1.0",
     requiredVersion: "0.0.1",
-    description: "获取 mukaku.com 影视数据，支持类型/地区/年份/画质/评分等多维筛选，通过 TMDB 补全元数据",
+    description: "获取 mukaku.com 影视数据，支持类型/地区/年份/画质/评分等多维筛选，通过 TMDB 补全元数据；内置 WAF 滑块自动验证",
     author: "Antigravity",
     site: "https://web5.mukaku.com",
     globalParams: [],
@@ -184,6 +184,217 @@ const API_BASE = `${BASE_URL}/prod/api/v1/getVideoMovieList`;
 const APP_ID = "83768d9ad4";
 const IDENTITY = "23734adac0301bccdcb107c4aa21f96c";
 
+// ===== WAF 滑块自动验证（2026-10 站点新加）=====
+// web5.mukaku.com 前面挂了 GoEdge WAF：不带放行 Cookie 请求接口，会被 307 跳到
+// /WAF/VERIFY/CAPTCHA 这个拖滑块页面，拿回来的就是空数据/报错。
+// 处理方式：请求被跳转 → 取出页面里的「验证编号 + 签名」→ 用同样参数提交一次
+// → 服务端下发 ge_wc_* 放行 Cookie → 带着它重试原请求。Cookie 记住 20 分钟。
+const UA_NEW = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+const WAF_COOKIE_TTL = 20 * 60 * 1000;
+const WAF_STORAGE_KEY = "mukaku_waf_cookie_v2";
+
+let _wafCookie = "";
+let _wafExpire = 0;
+let _wafSolving = null;
+
+function baseHeaders() {
+    return {
+        "User-Agent": UA_NEW,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Referer": `${BASE_URL}/`,
+    };
+}
+
+function withCookie(headers) {
+    const h = { ...(headers || {}) };
+    if (_wafCookie) h.Cookie = _wafCookie;
+    return h;
+}
+
+function loadStoredCookie() {
+    if (_wafCookie && Date.now() < _wafExpire) return _wafCookie;
+    try {
+        const saved = Widget.storage.get(WAF_STORAGE_KEY);
+        if (saved && saved.cookie && saved.expire && Date.now() < saved.expire) {
+            _wafCookie = saved.cookie;
+            _wafExpire = saved.expire;
+            return _wafCookie;
+        }
+    } catch (e) {
+        // storage 不可用时忽略，退化为内存缓存
+    }
+    return "";
+}
+
+function saveCookie(cookie) {
+    _wafCookie = cookie;
+    _wafExpire = Date.now() + WAF_COOKIE_TTL;
+    try {
+        Widget.storage.set(WAF_STORAGE_KEY, { cookie: cookie, expire: _wafExpire });
+    } catch (e) {
+        // 忽略
+    }
+}
+
+function headerValue(headers, name) {
+    if (!headers || typeof headers !== "object") return "";
+    const target = String(name).toLowerCase();
+    const hit = Object.keys(headers).filter(k => k.toLowerCase() === target)[0];
+    return hit ? String(headers[hit]) : "";
+}
+
+function pickSetCookies(headers) {
+    if (!headers || typeof headers !== "object") return [];
+    const raw = headers["set-cookie"] || headers["Set-Cookie"];
+    if (!raw) return [];
+    return Array.isArray(raw) ? raw : [String(raw)];
+}
+
+function mergeCookieJar(jar, setCookieList) {
+    (setCookieList || []).forEach(raw => {
+        const first = String(raw || "").split(";")[0];
+        const idx = first.indexOf("=");
+        if (idx <= 0) return;
+        jar[first.slice(0, idx).trim()] = first.slice(idx + 1).trim();
+    });
+    return jar;
+}
+
+function jarToHeader(jar) {
+    return Object.keys(jar || {}).map(k => `${k}=${jar[k]}`).join("; ");
+}
+
+function parseCaptchaPage(html) {
+    const text = String(html || "");
+    const idMatch = text.match(/name="GOEDGE_WAF_CAPTCHA_ID"\s+value="([^"]+)"/i);
+    // 页面脚本里：t.setAttribute("value","1234...")
+    const nonceMatch = text.match(/setAttribute\(["']value["'],\s*["']([^"']*)["']\)/i);
+    return {
+        captchaId: idMatch ? idMatch[1] : "",
+        nonce: nonceMatch ? nonceMatch[1] : "",
+    };
+}
+
+function isWafUrl(url) {
+    return /\/WAF\/VERIFY\/CAPTCHA/i.test(String(url || ""));
+}
+
+function looksLikeCaptchaBody(body) {
+    return typeof body === "string" && /GOEDGE_WAF_CAPTCHA_ID|Verify Yourself/i.test(body);
+}
+
+/**
+ * 走一遍滑块验证，拿到放行 Cookie
+ */
+async function solveWaf(verifyUrl) {
+    if (_wafSolving) return await _wafSolving;
+    _wafSolving = (async () => {
+        console.log("[不太灵] 触发滑块验证，开始自动通过...");
+        const page = await Widget.http.get(verifyUrl, {
+            headers: {
+                ...baseHeaders(),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        });
+
+        const jar = mergeCookieJar({}, pickSetCookies(page && page.headers));
+        const html = typeof (page && page.data) === "string" ? page.data : JSON.stringify((page && page.data) || "");
+        const { captchaId, nonce } = parseCaptchaPage(html);
+        if (!captchaId) throw new Error("滑块验证页解析失败：没找到验证编号");
+
+        const form = `GOEDGE_WAF_CAPTCHA_ID=${encodeURIComponent(captchaId)}&nonce=${encodeURIComponent(nonce)}`;
+        const submitted = await Widget.http.post(verifyUrl, form, {
+            headers: {
+                ...baseHeaders(),
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                ...(Object.keys(jar).length ? { "Cookie": jarToHeader(jar) } : {}),
+            },
+            allow_redirects: false,
+        });
+
+        mergeCookieJar(jar, pickSetCookies(submitted && submitted.headers));
+        const pass = Object.keys(jar).filter(k => /^ge_wc_/i.test(k));
+        if (!pass.length) throw new Error("滑块验证未通过：没拿到放行凭证");
+
+        const cookie = jarToHeader(jar);
+        saveCookie(cookie);
+        console.log("[不太灵] 滑块验证通过，已拿到放行凭证");
+        return cookie;
+    })();
+
+    try {
+        return await _wafSolving;
+    } finally {
+        _wafSolving = null;
+    }
+}
+
+/**
+ * 带自动过滑块的 GET：被拦就走验证，最多重试 3 次
+ */
+async function wafGet(url, options = {}) {
+    const maxAttempts = options.maxAttempts || 3;
+    loadStoredCookie();
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let res = null;
+        try {
+            res = await Widget.http.get(url, {
+                ...options,
+                headers: withCookie(options.headers || baseHeaders()),
+                allow_redirects: false,
+            });
+        } catch (err) {
+            lastError = err;
+            _wafCookie = "";
+            _wafExpire = 0;
+            continue;
+        }
+
+        const location = headerValue(res && res.headers, "location");
+        const status = Number(res && res.status) || 0;
+
+        if (isWafUrl(location)) {
+            _wafCookie = "";
+            _wafExpire = 0;
+            lastError = new Error("被滑块验证拦截");
+            try {
+                await solveWaf(location.startsWith("http") ? location : `${BASE_URL}${location}`);
+            } catch (e) {
+                lastError = e;
+            }
+            continue;
+        }
+
+        if (looksLikeCaptchaBody(res && res.data)) {
+            _wafCookie = "";
+            _wafExpire = 0;
+            lastError = new Error("返回内容是滑块验证页");
+            const m = String(res.data).match(/\/WAF\/VERIFY\/CAPTCHA[^"'\s>]*/i);
+            if (m) {
+                try {
+                    await solveWaf(`${BASE_URL}${m[0].replace(/&amp;/g, "&")}`);
+                } catch (e) {
+                    lastError = e;
+                }
+            }
+            continue;
+        }
+
+        if (!status || (status >= 200 && status < 300)) return res;
+
+        // 其它状态码：清掉 Cookie 再试一次
+        _wafCookie = "";
+        _wafExpire = 0;
+        lastError = new Error(`接口返回 HTTP ${status}`);
+    }
+
+    throw lastError || new Error("请求失败");
+}
+
 /**
  * 剧集标题清理：去掉季数/年番/数字后缀，避免 TMDB 搜索首播季失败
  * 例：德黑兰 第三季  → 德黑兰
@@ -238,17 +449,21 @@ async function fetchMukaku(params, contentType = "1") {
         `&app_id=${APP_ID}&identity=${IDENTITY}`;
 
     try {
-        const response = await Widget.http.get(url, {
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "Referer": `${BASE_URL}/`,
+        // 注意：这里必须走 wafGet，否则会被滑块拦下、只拿到空数据
+        const response = await wafGet(url, { headers: baseHeaders() });
+        let data = response ? response.data : null;
+        if (typeof data === "string") {
+            try {
+                data = JSON.parse(data);
+            } catch (e) {
+                console.error("不太灵返回的不是 JSON，可能是验证页");
+                return null;
             }
-        });
-        return response.data || null;
+        }
+        return data || null;
     } catch (err) {
-        console.error(`请求 mukaku API 失败: ${err}`);
+        const msg = err && err.message ? err.message : String(err);
+        console.error(`请求不太灵 API 失败: ${msg}`);
         return null;
     }
 }
@@ -304,7 +519,7 @@ async function fetchAndEnrich(params, mediaType, contentType = "1") {
                     {
                         headers: {
                             "Referer": "https://movie.douban.com/explore",
-                            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "User-Agent": UA_NEW,
                         }
                     }
                 );
