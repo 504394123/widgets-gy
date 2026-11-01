@@ -395,6 +395,10 @@ async function wafGet(url, options = {}) {
 
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // 两次尝试之间稍等一下，避免瞬间连续请求被对方当异常流量掐断连接
+        if (attempt > 1) {
+            await new Promise(resolve => setTimeout(resolve, 800 * attempt));
+        }
         let res = null;
         try {
             res = await Widget.http.get(url, {
