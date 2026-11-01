@@ -1,12 +1,31 @@
 WidgetMetadata = {
     id: "forward.butailing",
     title: "不太冷影视",
-    version: "1.1.0",
+    version: "1.2.0",
     requiredVersion: "0.0.1",
-    description: "获取 mukaku.com 影视数据，支持类型/地区/年份/画质/评分等多维筛选，通过 TMDB 补全元数据；内置 WAF 滑块自动验证",
+    description: "获取 mukaku.com 影视数据，支持类型/地区/年份/画质/评分等多维筛选，通过 TMDB 补全元数据；默认走局域网 Gying 服务中转（免滑块验证），可切换直连",
     author: "Antigravity",
-    site: "https://web5.mukaku.com",
-    globalParams: [],
+    site: "http://192.168.3.50:21111/",
+    globalParams: [
+        {
+            name: "data_source",
+            title: "数据来源",
+            type: "enumeration",
+            value: "local",
+            enumOptions: [
+                { title: "本地服务中转（推荐，免滑块）", value: "local" },
+                { title: "直连不太灵（走滑块自动验证）", value: "direct" },
+            ],
+        },
+        {
+            name: "local_server",
+            title: "本地服务地址",
+            type: "input",
+            value: "http://192.168.3.50:21111",
+            description: "数据来源选「本地服务中转」时使用",
+            belongTo: { paramName: "data_source", value: ["local"] },
+        },
+    ],
     modules: [
         {
             id: "movies",
@@ -183,6 +202,42 @@ const API_BASE = `${BASE_URL}/prod/api/v1/getVideoMovieList`;
 // 这两个值为静态 API 凭证（从前端 JS 中提取，无需登录）
 const APP_ID = "83768d9ad4";
 const IDENTITY = "23734adac0301bccdcb107c4aa21f96c";
+
+// ===== 数据来源 =====
+// local  → 走局域网 Gying 服务的中转接口（推荐：那边已经处理过滑块验证，快且稳）
+// direct → 直连不出灵，自己解决滑块（保留作为兜底）
+const DEFAULT_SOURCE = "local";
+const DEFAULT_LOCAL_SERVER = "http://192.168.3.50:21111";
+const LOCAL_RAW_PATH = "/api/mukaku/raw";
+
+function pickDataSource(params = {}) {
+    const source = String(params.data_source || DEFAULT_SOURCE).toLowerCase();
+    return source === "direct" ? "direct" : "local";
+}
+
+function pickLocalServer(params = {}) {
+    return String(params.local_server || DEFAULT_LOCAL_SERVER).replace(/\s+$/g, "").replace(/\/+$/, "");
+}
+
+/**
+ * 走本地服务中转：原样拿到和源站一样的 JSON（success / data.list / data.total）
+ */
+async function fetchFromLocal(endpoint, query, server) {
+    const url = `${server}${LOCAL_RAW_PATH}?endpoint=${encodeURIComponent(endpoint)}&${query}`;
+    const response = await Widget.http.get(url, { headers: { "Accept": "application/json" } });
+    let data = response ? response.data : null;
+    if (typeof data === "string") {
+        try {
+            data = JSON.parse(data);
+        } catch (e) {
+            throw new Error("本地服务返回的不是 JSON");
+        }
+    }
+    if (!data || data.success === false) {
+        throw new Error((data && (data.error || data.message)) || "本地服务返回失败");
+    }
+    return data;
+}
 
 // ===== WAF 滑块自动验证（2026-10 站点新加）=====
 // web5.mukaku.com 前面挂了 GoEdge WAF：不带放行 Cookie 请求接口，会被 307 跳到
@@ -437,7 +492,8 @@ async function fetchMukaku(params, contentType = "1") {
     const pfrs = params.pfrs || "0";
     const pfqj = params.pfqj || "0x10";
 
-    const url = `${API_BASE}?sa=${contentType}&sb=&sc=${encodeURIComponent(genre)}&sct=&scn=0` +
+    // 源站和本地转发接口用的是同一套参数名，这里只拼一次
+    const query = `sa=${contentType}&sb=&sc=${encodeURIComponent(genre)}&sct=&scn=0` +
         `&sd=${encodeURIComponent(area)}&sdt=&sdn=` +
         `&se=${encodeURIComponent(year)}&set=&sen=` +
         `&sf=${encodeURIComponent(quality)}&sft=&sfn=` +
@@ -448,9 +504,21 @@ async function fetchMukaku(params, contentType = "1") {
         `&imdb=0&imdbt=&imdbn=&iswp=0&iswpt=&iswpn=` +
         `&app_id=${APP_ID}&identity=${IDENTITY}`;
 
+    const source = pickDataSource(params);
+    if (source === "local") {
+        const server = pickLocalServer(params);
+        try {
+            return await fetchFromLocal("getVideoMovieList", query, server);
+        } catch (err) {
+            const msg = err && err.message ? err.message : String(err);
+            console.error(`[不太灵] 本地服务（${server}）取数失败: ${msg}，自动改走直连`);
+            // 本地服务不可用（例如不在同一局域网）时，自动兜底直连
+        }
+    }
+
     try {
-        // 注意：这里必须走 wafGet，否则会被滑块拦下、只拿到空数据
-        const response = await wafGet(url, { headers: baseHeaders() });
+        // 直连必须走 wafGet，否则会被滑块拦下、只拿到空数据
+        const response = await wafGet(`${API_BASE}?${query}`, { headers: baseHeaders() });
         let data = response ? response.data : null;
         if (typeof data === "string") {
             try {
