@@ -1,7 +1,7 @@
 WidgetMetadata = {
   id: "forward.subtitle.stremio.local",
   title: "Stremio 本地字幕",
-  version: "1.0.0",
+  version: "1.0.1",
   requiredVersion: "0.0.1",
   description: "连接现有 Stremio 字幕中转，保留英文、AI 翻译和已完成标签；仅在选字幕后由播放器下载。",
   author: "鹈鹕",
@@ -92,6 +92,23 @@ function stremioSubtitleUrl(value, base) {
   return base + "/" + url;
 }
 
+function stremioSortSubtitles(rows) {
+  return rows.map(function (row, index) {
+    var label = row.id + " " + row.title;
+    var match = /(?:^|[-_\s])([a-z]+)(\d+)(?=$|[-_\s(（])/i.exec(label);
+    return {
+      row: row, index: index,
+      group: match ? match[1].toLowerCase() : "",
+      number: match ? Number(match[2]) : 0,
+      translation: /翻译|translat|\bai\b/i.test(label) ? 1 : 0
+    };
+  }).sort(function (a, b) {
+    if (!a.group || !b.group) return a.group ? -1 : b.group ? 1 : a.index - b.index;
+    if (a.group !== b.group) return a.group < b.group ? -1 : 1;
+    return a.number - b.number || a.translation - b.translation || a.index - b.index;
+  }).map(function (entry) { return entry.row; });
+}
+
 async function loadSubtitle(params) {
   params = params || {};
   var base = stremioBase(params.server);
@@ -121,5 +138,5 @@ async function loadSubtitle(params) {
     if (typeof sub.count === "number" && sub.count >= 0) row.count = sub.count;
     result.push(row);
   }
-  return result;
+  return stremioSortSubtitles(result);
 }
